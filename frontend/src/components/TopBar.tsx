@@ -1,0 +1,75 @@
+import { useNavigate } from 'react-router-dom';
+import { useAppData } from '@/hooks/useAppData';
+import { useSymbol } from '@/hooks/useSymbol';
+import { TickerSearch } from './TickerSearch';
+import { KillSwitch } from './KillSwitch';
+import { money, signed, pct, colorBySign } from '@/lib/format';
+import { Badge } from './ui';
+
+function ConnDot({ ok }: { ok: boolean }) {
+  return (
+    <span
+      title={ok ? 'Connected' : 'Disconnected'}
+      className={`inline-block w-2 h-2 rounded-full ${
+        ok ? 'bg-up shadow-[0_0_6px_#1bcf6b]' : 'bg-down'
+      }`}
+    />
+  );
+}
+
+export function TopBar() {
+  const { account, clock, health, wsStatus } = useAppData();
+  const { setSymbol } = useSymbol();
+  const navigate = useNavigate();
+
+  const marketOpen = clock?.is_open ?? health?.market_open ?? false;
+  const dayPl = account?.day_pl ?? 0;
+
+  return (
+    <header className="flex items-center gap-4 px-4 h-12 bg-panel border-b border-border shrink-0">
+      {/* Logo */}
+      <div className="flex items-center gap-2 shrink-0">
+        <div className="w-2 h-5 bg-amber rounded-sm" />
+        <span className="font-bold tracking-widest text-amber text-sm">TERMINAL</span>
+      </div>
+
+      {/* Search */}
+      <TickerSearch
+        className="w-64"
+        onSelect={(s) => {
+          setSymbol(s);
+          navigate('/');
+        }}
+        placeholder="Ticker / command…"
+      />
+
+      {/* Center: clock + status */}
+      <div className="flex items-center gap-3 mx-auto">
+        <span className="num text-xs text-text-dim">
+          {clock ? new Date(clock.timestamp).toLocaleTimeString('en-US', { hour12: false }) : '--:--:--'}
+        </span>
+        <Badge tone={marketOpen ? 'up' : 'down'}>{marketOpen ? 'Open' : 'Closed'}</Badge>
+        {health?.paper && <Badge tone="amber">Paper</Badge>}
+      </div>
+
+      {/* Right: equity, P&L, conn, kill */}
+      <div className="flex items-center gap-4 shrink-0">
+        <div className="text-right">
+          <div className="micro-label">Equity</div>
+          <div className="num text-sm text-text">{money(account?.equity ?? null)}</div>
+        </div>
+        <div className="text-right">
+          <div className="micro-label">Day P&amp;L</div>
+          <div className={`num text-sm ${colorBySign(dayPl)}`}>
+            {signed(dayPl)} <span className="text-2xs">{pct(account?.day_pl_pct)}</span>
+          </div>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <ConnDot ok={wsStatus === 'open' && !!health?.alpaca_connected} />
+          <span className="micro-label">{wsStatus === 'open' ? 'Live' : 'Off'}</span>
+        </div>
+        <KillSwitch />
+      </div>
+    </header>
+  );
+}

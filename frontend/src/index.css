@@ -1,0 +1,71 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: #0a0b0d;
+  color: #c9d1da;
+  font-family: '"JetBrains Mono"', 'SF Mono', Menlo, Consolas, monospace;
+  -webkit-font-smoothing: antialiased;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #0d1117;
+}
+::-webkit-scrollbar-thumb {
+  background: #2a3140;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #3a4250;
+}
+
+@layer components {
+  .panel {
+    @apply bg-panel border border-border rounded;
+  }
+  .micro-label {
+    @apply text-2xs uppercase tracking-widest text-muted font-medium;
+  }
+  .num {
+    @apply font-mono tabular-nums;
+  }
+  .data-row {
+    @apply border-b border-border/60 hover:bg-panel-2 transition-colors;
+  }
+  .btn {
+    @apply px-3 py-1.5 text-xs rounded border border-border-2 bg-panel-2 hover:bg-border text-text transition-colors;
+  }
+  .btn-amber {
+    @apply px-3 py-1.5 text-xs rounded border border-amber/40 bg-amber/10 hover:bg-amber/20 text-amber transition-colors;
+  }
+  .input {
+    @apply bg-bg-2 border border-border rounded px-2 py-1.5 text-sm text-text outline-none focus:border-amber/50;
+  }
+}
+
+@keyframes flashUp {
+  0% { background-color: rgba(27, 207, 107, 0.25); }
+  100% { background-color: transparent; }
+}
+@keyframes flashDown {
+  0% { background-color: rgba(255, 77, 77, 0.25); }
+  100% { background-color: transparent; }
+}
+.flash-up { animation: flashUp 0.6s ease-out; }
+.flash-down { animation: flashDown 0.6s ease-out; }

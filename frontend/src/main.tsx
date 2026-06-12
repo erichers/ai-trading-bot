@@ -1,0 +1,44 @@
+import React from 'react';
+import ReactDOM from 'react-dom/client';
+import { createBrowserRouter, RouterProvider } from 'react-router-dom';
+import './index.css';
+import { Layout } from './components/Layout';
+import { AppDataProvider } from './hooks/useAppData';
+import { SymbolProvider } from './hooks/useSymbol';
+import { Dashboard } from './views/Dashboard';
+import { Tickers } from './views/Tickers';
+import { OptionsFlowView } from './views/OptionsFlow';
+import { Strategies } from './views/Strategies';
+import { Research } from './views/Research';
+import { News } from './views/News';
+import { PositionsOrders } from './views/PositionsOrders';
+import { SettingsView } from './views/Settings';
+import { Help } from './views/Help';
+
+const router = createBrowserRouter([
+  {
+    path: '/',
+    element: <Layout />,
+    children: [
+      { index: true, element: <Dashboard /> },
+      { path: 'tickers', element: <Tickers /> },
+      { path: 'options', element: <OptionsFlowView /> },
+      { path: 'strategies', element: <Strategies /> },
+      { path: 'research', element: <Research /> },
+      { path: 'news', element: <News /> },
+      { path: 'positions', element: <PositionsOrders /> },
+      { path: 'settings', element: <SettingsView /> },
+      { path: 'help', element: <Help /> },
+    ],
+  },
+]);
+
+ReactDOM.createRoot(document.getElementById('root')!).render(
+  <React.StrictMode>
+    <AppDataProvider>
+      <SymbolProvider>
+        <RouterProvider router={router} />
+      </SymbolProvider>
+    </AppDataProvider>
+  </React.StrictMode>,
+);

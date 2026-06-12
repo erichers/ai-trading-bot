@@ -67,26 +67,34 @@ Paper/live is a global, prominently displayed switch. Live mode requires re-auth
 
 ---
 
-## Getting started
+## The app
+
+A full Bloomberg-style trading terminal lives in this repo:
+
+- **`backend/`** — FastAPI + `alpaca-py` (live paper trading & market data), pure-pandas indicators, Anthropic-powered AI research, SQLite persistence, and a `/ws` realtime feed. ~30 endpoints under `/api`.
+- **`frontend/`** — React + TypeScript + Vite + Tailwind dark terminal UI with 9 views: **Dashboard, Tickers, Options Flow (weekly/daily), Strategies (indicators-to-fire), Research, News, Positions & Orders, Settings, Help** — TradingView charts, live watchlist with tick flashes, function bar with command search + **KILL SWITCH**.
 
 ### Prerequisites
-- Python 3.12+, Node 20+, Docker
+- Python 3.11+ (3.12 recommended), Node 20+
 - A free [Alpaca paper trading account](https://app.alpaca.markets) and API keys
-- An [Anthropic API key](https://console.anthropic.com)
+- *(Optional)* an [Anthropic API key](https://console.anthropic.com) — AI research serves structured mock data without one
 
-### Setup
+### Run it
 
 ```bash
-git clone https://github.com/erichers/<repo>.git
-cd <repo>
+git clone https://github.com/erichers/ai-trading-bot.git
+cd ai-trading-bot
 
 # Configure secrets (never commit these)
-cp .env.example .env
-# edit .env with your Alpaca paper keys + Anthropic key
+cp .env.example .env        # add your Alpaca paper keys (+ optional ANTHROPIC_API_KEY)
 
-# Bring up Postgres/Timescale + Redis
-docker compose up -d   # (added in Phase 0)
+# One command to start both servers:
+./dev.sh                    # backend :8000 + frontend :5173 → open http://localhost:5173
 ```
+
+Or run them separately — see `backend/README.md` and `frontend/README.md`.
+
+The app **defaults to paper mode** and degrades gracefully: every external call falls back to realistic mock data, so the UI never crashes when a feed or key is missing.
 
 The Alpaca paper endpoint is `https://paper-api.alpaca.markets/v2`. Use the `FAKEPACA` test symbol to validate the data pipeline before market hours.
 
