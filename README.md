@@ -41,7 +41,7 @@ Claude generates trade theses and signals, but a rule-based **risk engine valida
 |---|---|
 | **Market Data Service** | Holds the Alpaca WebSocket, subscribes to bars/quotes/trades, computes rolling indicators, persists bars to TimescaleDB, republishes to the frontend. Auto-reconnect with backoff + REST gap-fill. |
 | **Strategy Engine** | Evaluates composable trigger rules each bar close (1m/5m/15m/1h/1d) over an indicator library (SMA/EMA, RSI, MACD, Bollinger, ATR, VWAP, Stochastic, ADX, OBV). Emits a **signal, not an order**. |
-| **AI Analyst (Claude)** | On signals/schedule/demand: bars + indicators + Alpaca news → structured JSON `{thesis, sentiment, conviction, key_risks, suggested_action/stop/target, regime}`, plus a bull/bear critique pass. Every analysis is stored and auditable. |
+| **AI Analyst (local Gemma)** | On signals/schedule/demand: bars + indicators + Alpaca news → structured JSON `{thesis, sentiment, conviction, key_risks, suggested_action/stop/target, regime, bear_case}` from `gemma4:e2b` via Ollama (no cloud key). Every analysis is persisted to MySQL and auditable. |
 | **Risk Engine** | Pure deterministic veto layer: max position size, max open positions, daily-loss circuit breaker, per-trade risk (R), concentration limits, time windows, PDT awareness, kill switch. Sizing: `qty = (equity × risk%) / (entry − stop)`. |
 | **Execution Manager** | Default **bracket orders** (entry + take-profit + stop-loss, atomic). Trailing-stop exits via the `trade_updates` fill-listener workaround. Handles partial fills, rejections, breakeven moves, EOD flatten. |
 
@@ -57,9 +57,9 @@ Paper/live is a global, prominently displayed switch. Live mode requires re-auth
 
 ## Tech stack
 
-- **Backend:** Python 3.12, FastAPI, `alpaca-py`, asyncio
-- **Database:** PostgreSQL + TimescaleDB · **Cache/pubsub:** Redis
-- **AI:** Anthropic API (Sonnet for routine scans, Opus-class for deep research)
+- **Backend:** Python 3.12, FastAPI, `alpaca-py`, SQLAlchemy 2.0, asyncio
+- **Database:** MySQL 8 (via MAMP) — trades ledger, research, signals, config
+- **AI:** local **Gemma (`gemma4:e2b`) via Ollama** by default; Anthropic API optional
 - **Frontend:** React + TypeScript + Vite, Tailwind, shadcn/ui
 - **Charts:** TradingView Lightweight Charts
 - **Backtesting:** vectorbt / backtrader on Alpaca historical bars
@@ -79,20 +79,31 @@ A full Bloomberg-style trading terminal lives in this repo:
 - A free [Alpaca paper trading account](https://app.alpaca.markets) and API keys
 - *(Optional)* an [Anthropic API key](https://console.anthropic.com) — AI research serves structured mock data without one
 
-### Run it
+### Local infrastructure
 
+This deployment runs entirely on local infra — no cloud AI key required:
+
+- **MySQL via MAMP** (`127.0.0.1:8889`, db `trading_terminal`) — persists **all trades**, research analyses, signals, briefings, strategies, watchlist. Start MAMP, or `/Applications/MAMP/bin/startMysql.sh`.
+- **Local AI research via Ollama** — model **`gemma4:e2b`** at `localhost:11434`. `ollama serve && ollama pull gemma4:e2b`.
+- **Alpaca** paper trading + market data + **real options chains** (entitlement enabled).
+
+### Run it — two modes
+
+**Dev (hot reload):**
 ```bash
-git clone https://github.com/erichers/ai-trading-bot.git
-cd ai-trading-bot
-
-# Configure secrets (never commit these)
-cp .env.example .env        # add your Alpaca paper keys (+ optional ANTHROPIC_API_KEY)
-
-# One command to start both servers:
-./dev.sh                    # backend :8000 + frontend :5173 → open http://localhost:5173
+cp .env.example .env        # add your Alpaca paper keys
+./dev.sh                    # backend :8000 + Vite :5173 → http://localhost:5173
 ```
 
-Or run them separately — see `backend/README.md` and `frontend/README.md`.
+**Served under MAMP/Apache at `/sandbox/` (production-style):**
+```bash
+# one-time: append the Apache vhost block, then restart MAMP's Apache
+cat deploy/apache-sandbox.conf >> /Applications/MAMP/conf/apache/httpd.conf
+
+./serve.sh                  # builds the SPA + runs Ollama/MySQL/backend
+# → open http://localhost:8888/sandbox/
+```
+Apache serves the built SPA from `frontend/dist` and reverse-proxies `/sandbox/api` and `/sandbox/ws` to the FastAPI backend on :8000 (same-origin, websockets via `mod_proxy_wstunnel`).
 
 The app **defaults to paper mode** and degrades gracefully: every external call falls back to realistic mock data, so the UI never crashes when a feed or key is missing.
 

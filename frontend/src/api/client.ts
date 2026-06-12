@@ -14,15 +14,20 @@ import type {
   Order,
   Position,
   Regime,
+  ResearchHistoryItem,
   ResearchReport,
   SignalEvalResult,
+  SignalHistoryItem,
   SnapshotMap,
   Strategy,
   StrategyRule,
   Timeframe,
+  Trade,
 } from './types';
 
-const BASE = '/api';
+// Same-origin API base. Dev: '/api' (Vite proxy → :8000). Prod under Apache:
+// '/sandbox/api' (mod_proxy → uvicorn :8000). Derived from Vite's base URL.
+const BASE = `${import.meta.env.BASE_URL}api`.replace(/\/{2,}/g, '/');
 
 export class ApiError extends Error {
   status: number;
@@ -127,6 +132,14 @@ export const api = {
     }),
   briefing: () => request<Briefing>('/research/briefing'),
   regime: () => request<Regime>('/research/regime'),
+  researchHistory: (symbol?: string, limit = 50) =>
+    request<ResearchHistoryItem[]>(`/research/history${qs({ symbol, limit })}`),
+
+  trades: (status?: string, symbol?: string, limit = 100) =>
+    request<Trade[]>(`/trades${qs({ status, symbol, limit })}`),
+
+  signalsHistory: (symbol?: string, limit = 50) =>
+    request<SignalHistoryItem[]>(`/signals/history${qs({ symbol, limit })}`),
 };
 
 export type Api = typeof api;

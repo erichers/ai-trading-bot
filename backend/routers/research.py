@@ -1,9 +1,10 @@
-"""AI research routes (Anthropic-backed with mock fallback)."""
+"""AI research routes (Ollama/Gemma-backed with mock fallback); persisted to MySQL."""
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 
 import db
+from config import logger
 from models import AnalyzeRequest
 from services import research as research_svc
 
@@ -12,12 +13,27 @@ router = APIRouter(prefix="/research", tags=["research"])
 
 @router.post("/analyze")
 def analyze(body: AnalyzeRequest):
-    return research_svc.analyze(body.symbol)
+    result = research_svc.analyze(body.symbol)
+    try:
+        db.insert_research(result)
+    except Exception as exc:
+        logger.warning("insert_research failed (%s).", exc)
+    return result
+
+
+@router.get("/history")
+def history(symbol: str | None = None, limit: int = Query(50, ge=1, le=200)):
+    return db.list_research(symbol=symbol, limit=limit)
 
 
 @router.get("/briefing")
 def briefing():
-    return research_svc.briefing(db.get_watchlist())
+    result = research_svc.briefing(db.get_watchlist())
+    try:
+        db.insert_briefing(result)
+    except Exception as exc:
+        logger.warning("insert_briefing failed (%s).", exc)
+    return result
 
 
 @router.get("/regime")

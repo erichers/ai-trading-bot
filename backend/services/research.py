@@ -1,60 +1,132 @@
-"""AI research via the Anthropic SDK (claude-sonnet-4-6). Falls back to mock JSON."""
+"""AI research. Default provider = local Ollama (Gemma). Anthropic optional.
+
+Calls POST {OLLAMA_BASE_URL}/api/chat with format:"json". Robustly parses the
+returned JSON (strips code fences) and falls back to deterministic mock on any
+failure so the UI never breaks.
+"""
 from __future__ import annotations
 
 import json
 import random
+import re
 from datetime import datetime, timezone
 from typing import Any
+
+import httpx
 
 from config import logger, settings
 from services import alpaca_service, indicators
 
-MODEL = "claude-sonnet-4-6"
+_OLLAMA_TIMEOUT = 120.0
 
+# Anthropic is an optional alternate provider.
 _anthropic_client = None
-_sdk_ok = False
+_anthropic_ok = False
 try:
     import anthropic
-    _sdk_ok = True
-except Exception as exc:  # pragma: no cover
-    logger.warning("anthropic SDK not importable (%s) — AI research mock-only.", exc)
-    _sdk_ok = False
+    _anthropic_ok = True
+except Exception:  # pragma: no cover
+    _anthropic_ok = False
+
+_ANTHROPIC_MODEL = "claude-sonnet-4-6"
 
 
-def _client():
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def ollama_connected() -> bool:
+    try:
+        r = httpx.get(f"{settings.ollama_base_url}/api/tags", timeout=3.0)
+        return r.status_code == 200
+    except Exception:
+        return False
+
+
+def _anthropic():
     global _anthropic_client
-    if not (_sdk_ok and settings.anthropic_configured):
+    if not (_anthropic_ok and settings.anthropic_configured):
         return None
     if _anthropic_client is None:
         _anthropic_client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
     return _anthropic_client
 
 
-# JSON schema the model is constrained to (structured outputs).
-_ANALYZE_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "thesis": {"type": "string"},
-        "sentiment_score": {"type": "number"},
-        "conviction": {"type": "number"},
-        "key_risks": {"type": "array", "items": {"type": "string"}},
-        "suggested_action": {"type": "string"},
-        "suggested_stop": {"type": "number"},
-        "suggested_target": {"type": "number"},
-        "regime": {"type": "string"},
-        "bear_case": {"type": "string"},
-    },
-    "required": [
-        "thesis", "sentiment_score", "conviction", "key_risks",
-        "suggested_action", "suggested_stop", "suggested_target",
-        "regime", "bear_case",
-    ],
-    "additionalProperties": False,
-}
+_SYSTEM = (
+    "You are a disciplined equity analyst. You always respond with a single STRICT "
+    "JSON object and nothing else. Keys: thesis (string), sentiment_score (number in "
+    "[-1,1]), conviction (number in [0,100]), key_risks (array of strings), "
+    "suggested_action (one of buy/hold/reduce/sell), suggested_stop (number, a price), "
+    "suggested_target (number, a price), regime (one of trend-up/trend-down/range/"
+    "high-vol), bear_case (string articulating the strongest opposing case)."
+)
 
 
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+def _build_prompt(symbol: str, snapshot: dict, ind: dict, bars: list[dict],
+                  news: list[dict]) -> str:
+    recent_bars = bars[-20:]
+    bar_lines = "\n".join(
+        f"{b.get('t', '')[:10]} O{b['o']} H{b['h']} L{b['l']} C{b['c']} V{b['v']}"
+        for b in recent_bars
+    )
+    news_lines = "\n".join(f"- {n['headline']} ({n['source']})" for n in news)
+    return (
+        f"Analyze {symbol}.\n\n"
+        f"Latest snapshot: {json.dumps(snapshot)}\n\n"
+        f"Indicator snapshot: {json.dumps(ind)}\n\n"
+        f"Recent daily bars (oldest->newest):\n{bar_lines}\n\n"
+        f"Recent headlines:\n{news_lines or '(none)'}\n\n"
+        "Produce a concise trading thesis, then reason through the strongest bear_case. "
+        "Give a sentiment_score in [-1,1], a conviction in [0,100], concrete "
+        "suggested_stop and suggested_target price levels near the current price, a "
+        "suggested_action, and the current market regime. Return STRICT JSON only."
+    )
+
+
+def _parse_json_loose(text: str) -> dict[str, Any]:
+    text = (text or "").strip()
+    # strip ```json ... ``` fences if present
+    fence = re.match(r"^```(?:json)?\s*(.*?)\s*```$", text, re.DOTALL)
+    if fence:
+        text = fence.group(1).strip()
+    try:
+        return json.loads(text)
+    except Exception:
+        # last-ditch: grab the first {...} block
+        m = re.search(r"\{.*\}", text, re.DOTALL)
+        if m:
+            return json.loads(m.group(0))
+        raise
+
+
+def _coerce(data: dict[str, Any], symbol: str, snapshot: dict, provider: str,
+            model: str) -> dict[str, Any]:
+    price = snapshot.get("price", 100.0) or 100.0
+
+    def num(v, default):
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return default
+
+    risks = data.get("key_risks") or []
+    if isinstance(risks, str):
+        risks = [risks]
+    return {
+        "symbol": symbol,
+        "thesis": str(data.get("thesis", "")).strip(),
+        "sentiment_score": max(-1.0, min(1.0, num(data.get("sentiment_score"), 0.0))),
+        "conviction": max(0.0, min(100.0, num(data.get("conviction"), 50.0))),
+        "key_risks": [str(r) for r in risks][:8],
+        "suggested_action": str(data.get("suggested_action", "hold")).lower(),
+        "suggested_stop": num(data.get("suggested_stop"), round(price * 0.95, 2)),
+        "suggested_target": num(data.get("suggested_target"), round(price * 1.08, 2)),
+        "regime": str(data.get("regime", "range")),
+        "bear_case": str(data.get("bear_case", "")).strip(),
+        "provider": provider,
+        "model": model,
+        "generated_at": _now(),
+    }
 
 
 def _mock_analyze(symbol: str, snapshot: dict, ind: dict) -> dict[str, Any]:
@@ -86,9 +158,27 @@ def _mock_analyze(symbol: str, snapshot: dict, ind: dict) -> dict[str, Any]:
             f"If {symbol} loses near-term support, momentum could flip; elevated valuations "
             "leave little cushion and a sector de-rating would pressure the name further."
         ),
-        "generated_at": _now(),
+        "provider": "mock",
         "model": "mock",
+        "generated_at": _now(),
     }
+
+
+def _ollama_chat(system: str, user: str, *, json_format: bool = True) -> str:
+    payload = {
+        "model": settings.research_model,
+        "stream": False,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+    }
+    if json_format:
+        payload["format"] = "json"
+    with httpx.Client(timeout=_OLLAMA_TIMEOUT) as client:
+        r = client.post(f"{settings.ollama_base_url}/api/chat", json=payload)
+        r.raise_for_status()
+        return r.json()["message"]["content"]
 
 
 def analyze(symbol: str) -> dict[str, Any]:
@@ -97,39 +187,31 @@ def analyze(symbol: str) -> dict[str, Any]:
     ind = indicators.compute_all(bars)
     snapshot = alpaca_service.get_snapshot(symbol)
     news = alpaca_service.get_news([symbol], 5)
+    prompt = _build_prompt(symbol, snapshot, ind, bars, news)
 
-    client = _client()
-    if client is None:
-        return _mock_analyze(symbol, snapshot, ind)
+    provider = (settings.research_provider or "ollama").lower()
 
-    news_lines = "\n".join(f"- {n['headline']} ({n['source']})" for n in news)
-    prompt = (
-        f"You are an equity analyst. Analyze {symbol}.\n\n"
-        f"Latest snapshot: {json.dumps(snapshot)}\n\n"
-        f"Indicator snapshot: {json.dumps(ind)}\n\n"
-        f"Recent headlines:\n{news_lines}\n\n"
-        "Produce a concise trading thesis. Separately reason through the strongest "
-        "bear case as a second consideration. Provide a sentiment_score in [-1, 1], "
-        "a conviction in [0, 100], concrete suggested_stop and suggested_target price "
-        "levels, a suggested_action (buy/hold/reduce/sell), and the current market "
-        "regime (trend-up/trend-down/range/high-vol). Return STRICT JSON only."
-    )
+    if provider == "anthropic" and _anthropic() is not None:
+        try:
+            resp = _anthropic().messages.create(
+                model=_ANTHROPIC_MODEL,
+                max_tokens=1500,
+                system=_SYSTEM,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            text = next((b.text for b in resp.content if b.type == "text"), "")
+            data = _parse_json_loose(text)
+            return _coerce(data, symbol, snapshot, "anthropic", _ANTHROPIC_MODEL)
+        except Exception as exc:
+            logger.warning("Anthropic analyze failed (%s) — falling back.", exc)
 
+    # Default: Ollama / Gemma.
     try:
-        resp = client.messages.create(
-            model=MODEL,
-            max_tokens=1500,
-            output_config={"format": {"type": "json_schema", "schema": _ANALYZE_SCHEMA}},
-            messages=[{"role": "user", "content": prompt}],
-        )
-        text = next((b.text for b in resp.content if b.type == "text"), "")
-        data = json.loads(text)
-        data["symbol"] = symbol
-        data["generated_at"] = _now()
-        data["model"] = MODEL
-        return data
+        content = _ollama_chat(_SYSTEM, prompt, json_format=True)
+        data = _parse_json_loose(content)
+        return _coerce(data, symbol, snapshot, "ollama", settings.research_model)
     except Exception as exc:
-        logger.warning("Anthropic analyze failed (%s) — returning mock.", exc)
+        logger.warning("Ollama analyze failed (%s) — returning mock.", exc)
         return _mock_analyze(symbol, snapshot, ind)
 
 
@@ -148,28 +230,32 @@ def briefing(watchlist: list[str]) -> dict[str, Any]:
 
     avg = sum(i["sentiment"] for i in items) / max(1, len(items))
     regime = "trend-up" if avg > 0.15 else ("trend-down" if avg < -0.15 else "range")
-
-    client = _client()
     summary = (
         f"Watchlist breadth is {'positive' if avg > 0 else 'mixed'} this session. "
         f"Average sentiment {avg:+.2f}; regime reads {regime}."
     )
-    if client is not None:
-        try:
-            resp = client.messages.create(
-                model=MODEL,
-                max_tokens=400,
-                messages=[{
-                    "role": "user",
-                    "content": (
-                        "Write a 2-sentence morning market briefing for this watchlist "
-                        f"snapshot: {json.dumps(items)}. Be concrete and concise."
-                    ),
-                }],
+
+    provider = (settings.research_provider or "ollama").lower()
+    user = (
+        "Write a concise 2-sentence morning market briefing for this watchlist "
+        f"snapshot: {json.dumps(items)}. Be concrete. Respond as JSON {{\"summary\": string}}."
+    )
+    try:
+        if provider == "anthropic" and _anthropic() is not None:
+            resp = _anthropic().messages.create(
+                model=_ANTHROPIC_MODEL, max_tokens=400,
+                messages=[{"role": "user", "content": user}],
             )
-            summary = next((b.text for b in resp.content if b.type == "text"), summary)
-        except Exception as exc:
-            logger.warning("Anthropic briefing failed (%s) — using mock summary.", exc)
+            txt = next((b.text for b in resp.content if b.type == "text"), "")
+            summary = _parse_json_loose(txt).get("summary", summary)
+        else:
+            content = _ollama_chat(
+                "You are a market strategist. Respond with STRICT JSON only.",
+                user, json_format=True,
+            )
+            summary = _parse_json_loose(content).get("summary", summary)
+    except Exception as exc:
+        logger.warning("briefing LLM failed (%s) — using computed summary.", exc)
 
     return {
         "generated_at": _now(),
@@ -190,7 +276,7 @@ def regime() -> dict[str, Any]:
     ind = indicators.compute_all(bars)
     atr = ind.get("atr14") or 0.0
     price = spy.get("price", 1.0) or 1.0
-    vix_proxy = round((atr / price) * 100 * 16, 2)  # crude annualized-vol proxy
+    vix_proxy = round((atr / price) * 100 * 16, 2)
 
     if vix_proxy > 25:
         reg = "high-vol"

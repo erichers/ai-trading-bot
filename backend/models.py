@@ -12,6 +12,9 @@ class HealthResponse(BaseModel):
     anthropic_configured: bool
     paper: bool = True
     market_open: bool
+    research_provider: str = "ollama"
+    research_model: str = "gemma4:e2b"
+    ollama_connected: bool = False
 
 
 class AccountResponse(BaseModel):
@@ -36,6 +39,9 @@ class OrderRequest(BaseModel):
     stop_price: Optional[float] = None
     take_profit: Optional[float] = None
     stop_loss: Optional[float] = None
+    asset_class: Optional[Literal["us_equity", "option"]] = None
+    source: Optional[Literal["manual", "strategy", "ai"]] = "manual"
+    strategy_id: Optional[str] = None
 
 
 class WatchlistAdd(BaseModel):

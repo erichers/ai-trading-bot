@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { X, Sparkles, ChevronDown, ChevronRight, Zap } from 'lucide-react';
 import { api } from '@/api/client';
 import type { Briefing, Order, ResearchReport, SnapshotMap, Timeframe } from '@/api/types';
@@ -358,7 +358,14 @@ function ActivityLog() {
   };
 
   return (
-    <Panel title="Activity Log">
+    <Panel
+      title="Activity Log"
+      right={
+        <Link to="/trades" className="text-2xs uppercase tracking-wider text-amber hover:underline">
+          View ledger →
+        </Link>
+      }
+    >
       {ordersQ.loading && orders.length === 0 ? (
         <Spinner label="loading" />
       ) : orders.length === 0 ? (

@@ -1,9 +1,19 @@
 import { useState } from 'react';
-import { Activity, Brain, Search, AlertTriangle, TrendingUp, TrendingDown } from 'lucide-react';
+import {
+  Activity,
+  Brain,
+  Search,
+  AlertTriangle,
+  TrendingUp,
+  TrendingDown,
+  ChevronDown,
+  ChevronRight,
+  History as HistoryIcon,
+} from 'lucide-react';
 import { api } from '@/api/client';
-import type { Regime, ResearchReport } from '@/api/types';
+import type { Regime, ResearchHistoryItem, ResearchReport } from '@/api/types';
 import { money, colorBySign, timeAgo } from '@/lib/format';
-import { Panel, Spinner, Empty, ErrorState, Badge } from '@/components/ui';
+import { Panel, Spinner, Empty, ErrorState, Badge, Toggle } from '@/components/ui';
 import { TickerSearch } from '@/components/TickerSearch';
 import { useSymbol } from '@/hooks/useSymbol';
 import { usePolling } from '@/hooks/usePolling';
@@ -291,16 +301,186 @@ function DeepDive() {
   );
 }
 
+// ---- history -------------------------------------------------------------
+
+function HistoryCard({ item }: { item: ResearchHistoryItem }) {
+  const [expanded, setExpanded] = useState(false);
+  const conviction = clamp(Number(item.conviction ?? 0), 0, 100);
+
+  return (
+    <div className="border border-border rounded bg-panel-2/40">
+      <button
+        className="w-full flex flex-wrap items-center gap-2 px-3 py-2 text-left hover:bg-panel-2"
+        onClick={() => setExpanded((v) => !v)}
+      >
+        {expanded ? (
+          <ChevronDown size={13} className="text-muted shrink-0" />
+        ) : (
+          <ChevronRight size={13} className="text-muted shrink-0" />
+        )}
+        <span className="font-mono text-sm text-text">{item.symbol}</span>
+        <Badge tone={actionTone(item.suggested_action)}>{item.suggested_action || 'N/A'}</Badge>
+        {item.regime && <Badge tone="neutral">{item.regime}</Badge>}
+
+        {/* conviction meter */}
+        <div className="flex items-center gap-1.5 min-w-[120px]">
+          <span className="micro-label">Conv</span>
+          <div className="w-16 h-2 rounded bg-bg-2 border border-border overflow-hidden">
+            <div className="h-full bg-amber" style={{ width: `${conviction}%` }} />
+          </div>
+          <span className="font-mono text-2xs text-amber">{conviction.toFixed(0)}</span>
+        </div>
+
+        <span className={`font-mono text-xs ${colorBySign(item.sentiment_score)}`}>
+          {item.sentiment_score > 0 ? '+' : ''}
+          {item.sentiment_score}
+        </span>
+
+        <div className="flex-1" />
+        {(item.provider || item.model) && (
+          <span className="text-2xs text-muted font-mono">
+            {[item.provider, item.model].filter(Boolean).join(' · ')}
+          </span>
+        )}
+        {item.generated_at && (
+          <span className="text-2xs text-muted">{timeAgo(item.generated_at)}</span>
+        )}
+      </button>
+
+      {expanded && (
+        <div className="px-3 pb-3 pt-1 flex flex-col gap-3 border-t border-border">
+          <div className="flex flex-col gap-1">
+            <span className="micro-label">Thesis</span>
+            <p className="text-sm text-text-dim leading-relaxed">{item.thesis || '—'}</p>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="border border-down/30 bg-down/5 rounded p-2.5 flex flex-col gap-1">
+              <div className="flex items-center gap-1.5">
+                <TrendingDown size={13} className="text-down" />
+                <span className="text-2xs uppercase tracking-widest text-down">Bear Case</span>
+              </div>
+              <p className="text-xs text-text-dim leading-relaxed">{item.bear_case || '—'}</p>
+            </div>
+            <div className="flex flex-col gap-1">
+              <span className="micro-label">Key Risks</span>
+              {item.key_risks && item.key_risks.length > 0 ? (
+                <ul className="flex flex-col gap-1">
+                  {item.key_risks.map((r, i) => (
+                    <li key={i} className="flex items-start gap-2 text-xs text-text-dim leading-relaxed">
+                      <AlertTriangle size={12} className="text-amber mt-0.5 shrink-0" />
+                      <span>{r}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <span className="text-xs text-muted">None noted</span>
+              )}
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="border border-border rounded p-2.5 flex flex-col gap-0.5">
+              <span className="micro-label">Suggested Stop</span>
+              <span className="font-mono text-sm text-down">{money(item.suggested_stop)}</span>
+            </div>
+            <div className="border border-border rounded p-2.5 flex flex-col gap-0.5">
+              <span className="micro-label">Suggested Target</span>
+              <span className="font-mono text-sm text-up">{money(item.suggested_target)}</span>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ResearchHistory() {
+  const [symbolFilter, setSymbolFilter] = useState('');
+  const { data, error, loading, refetch } = usePolling<ResearchHistoryItem[]>(
+    () => api.researchHistory(undefined, 50),
+    60000,
+  );
+
+  const items = data ?? [];
+  const filtered = items.filter((it) => {
+    const q = symbolFilter.trim().toUpperCase();
+    return !q || it.symbol.toUpperCase().includes(q);
+  });
+  // reverse-chron
+  const sorted = [...filtered].sort(
+    (a, b) => new Date(b.generated_at || 0).getTime() - new Date(a.generated_at || 0).getTime(),
+  );
+
+  const right = (
+    <div className="relative">
+      <Search size={12} className="absolute left-2 top-1/2 -translate-y-1/2 text-muted" />
+      <input
+        className="input font-mono uppercase pl-7 py-1 w-32 text-xs"
+        value={symbolFilter}
+        onChange={(e) => setSymbolFilter(e.target.value.toUpperCase())}
+        placeholder="Symbol…"
+        autoComplete="off"
+      />
+    </div>
+  );
+
+  let body: React.ReactNode;
+  if (loading && items.length === 0) body = <Spinner label="Loading history" />;
+  else if (error && items.length === 0)
+    body = <ErrorState label={`History unavailable — ${error.message}`} onRetry={refetch} />;
+  else if (sorted.length === 0) body = <Empty label="No past analyses" />;
+  else
+    body = (
+      <div className="p-3 flex flex-col gap-2">
+        {sorted.map((it) => (
+          <HistoryCard key={it.id} item={it} />
+        ))}
+      </div>
+    );
+
+  return (
+    <Panel title="Analysis History" right={right} className="flex-1 min-h-0" bodyClassName="overflow-auto">
+      {body}
+    </Panel>
+  );
+}
+
 // ---- view ----------------------------------------------------------------
 
 export function Research() {
+  const [tab, setTab] = useState<'live' | 'history'>('live');
+
   return (
-    <div className="flex flex-col gap-3 p-3 h-full overflow-auto">
-      <RegimeBanner />
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-3 flex-1 min-h-0">
-        <MorningBriefing />
-        <DeepDive />
+    <div className="flex flex-col gap-3 p-3 h-full overflow-hidden">
+      <div className="flex items-center gap-2 shrink-0">
+        <Toggle
+          value={tab}
+          onChange={(v) => setTab(v as 'live' | 'history')}
+          options={[
+            { value: 'live', label: 'Live' },
+            { value: 'history', label: 'History' },
+          ]}
+        />
+        {tab === 'history' && (
+          <span className="flex items-center gap-1.5 text-muted">
+            <HistoryIcon size={12} />
+            <span className="micro-label">Past analyses</span>
+          </span>
+        )}
       </div>
+
+      {tab === 'live' ? (
+        <div className="flex flex-col gap-3 flex-1 min-h-0 overflow-auto">
+          <RegimeBanner />
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-3 flex-1 min-h-0">
+            <MorningBriefing />
+            <DeepDive />
+          </div>
+        </div>
+      ) : (
+        <div className="flex flex-col flex-1 min-h-0">
+          <ResearchHistory />
+        </div>
+      )}
     </div>
   );
 }

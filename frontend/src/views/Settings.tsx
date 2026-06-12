@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, Check, Palette, ShieldAlert, SlidersHorizontal } from 'lucide-react';
+import { AlertTriangle, Check, Cpu, Palette, ShieldAlert, SlidersHorizontal } from 'lucide-react';
 import { api } from '@/api/client';
 import type { Health } from '@/api/types';
 import { Panel, Spinner, Badge, ErrorState } from '@/components/ui';
@@ -233,8 +233,17 @@ export function SettingsView() {
               <StatusRow label="Alpaca connected">
                 <YesNo value={!!health?.alpaca_connected} />
               </StatusRow>
-              <StatusRow label="Anthropic configured">
-                <YesNo value={!!health?.anthropic_configured} />
+              <StatusRow label="Research provider">
+                <span className="flex items-center gap-2">
+                  <Dot on={!!health?.ollama_connected} />
+                  <span className="font-mono text-xs text-amber">
+                    {health?.research_model || 'gemma4:e2b'}
+                  </span>
+                  <Badge tone="amber">Local Ollama</Badge>
+                </span>
+              </StatusRow>
+              <StatusRow label="Ollama connected">
+                <YesNo value={!!health?.ollama_connected} />
               </StatusRow>
               <StatusRow label="Market">
                 <Badge tone={health?.market_open ? 'up' : 'neutral'}>
@@ -260,6 +269,41 @@ export function SettingsView() {
                 <span className="micro-label">Accent</span>
                 <span className="inline-block w-4 h-4 rounded-sm bg-amber border border-border-2" />
                 <Badge tone="amber">Amber</Badge>
+              </div>
+            </div>
+          </div>
+        </Panel>
+
+        {/* RESEARCH ENGINE ------------------------------------------- */}
+        <Panel
+          title="Research Engine"
+          right={
+            <span className="flex items-center gap-1.5">
+              <Dot on={!!health?.ollama_connected} />
+              <Badge tone={health?.ollama_connected ? 'up' : 'down'}>
+                {health?.ollama_connected ? 'Online' : 'Offline'}
+              </Badge>
+            </span>
+          }
+        >
+          <div className="p-4 flex items-start gap-3">
+            <Cpu size={20} className="text-amber shrink-0 mt-0.5" />
+            <div className="text-xs text-text-dim leading-relaxed">
+              AI research now runs on a{' '}
+              <span className="text-amber font-semibold">local model</span> via Ollama — no
+              cloud API key is required.
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <span className="micro-label">Provider</span>
+                <span className="font-mono text-xs text-text">
+                  {health?.research_model || 'gemma4:e2b'}
+                </span>
+                <Badge tone="amber">
+                  {health?.research_provider || 'local Ollama'}
+                </Badge>
+              </div>
+              <div className="mt-2 text-muted">
+                Theses, sentiment and risk analysis are generated on-device. Cloud keys
+                are no longer needed for the Research view.
               </div>
             </div>
           </div>

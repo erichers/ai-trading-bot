@@ -7,6 +7,7 @@ import {
   Brain,
   Newspaper,
   Briefcase,
+  Receipt,
   Settings,
   HelpCircle,
   type LucideIcon,
@@ -26,6 +27,7 @@ const items: NavItem[] = [
   { to: '/research', icon: Brain, label: 'Research' },
   { to: '/news', icon: Newspaper, label: 'News' },
   { to: '/positions', icon: Briefcase, label: 'Positions' },
+  { to: '/trades', icon: Receipt, label: 'Trades' },
   { to: '/settings', icon: Settings, label: 'Settings' },
   { to: '/help', icon: HelpCircle, label: 'Help' },
 ];

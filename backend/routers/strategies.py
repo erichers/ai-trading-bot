@@ -1,9 +1,10 @@
 """Strategy CRUD + signal evaluation routes (SQLite persisted)."""
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
 import db
+from config import logger
 from models import SignalEvaluateRequest, Strategy
 from services import signals
 
@@ -39,4 +40,21 @@ def delete_strategy(strategy_id: str):
 @router.post("/signals/evaluate")
 def evaluate_signal(req: SignalEvaluateRequest):
     rules = [r.model_dump() for r in req.rules]
-    return signals.evaluate(req.symbol, req.timeframe, rules)
+    result = signals.evaluate(req.symbol, req.timeframe, rules)
+    try:
+        db.insert_signal({
+            "strategy_id": getattr(req, "strategy_id", None),
+            "symbol": req.symbol,
+            "timeframe": req.timeframe,
+            "fired": result.get("fired"),
+            "matched": result.get("matched"),
+            "snapshot": result.get("snapshot"),
+        })
+    except Exception as exc:
+        logger.warning("insert_signal failed (%s).", exc)
+    return result
+
+
+@router.get("/signals/history")
+def signals_history(symbol: str | None = None, limit: int = Query(50, ge=1, le=200)):
+    return db.list_signals(symbol=symbol, limit=limit)

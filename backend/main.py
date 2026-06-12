@@ -21,6 +21,7 @@ from routers import (
     watchlist,
 )
 from services import alpaca_service
+from services import research as research_svc
 from services.realtime import RealtimeBroadcaster
 
 app = FastAPI(title="AI Trading Terminal Backend", version="1.0.0")
@@ -47,6 +48,9 @@ def health():
         "anthropic_configured": settings.anthropic_configured,
         "paper": settings.alpaca_paper_trade,
         "market_open": alpaca_service.market_open(),
+        "research_provider": settings.research_provider,
+        "research_model": settings.research_model,
+        "ollama_connected": research_svc.ollama_connected(),
     }
 
 

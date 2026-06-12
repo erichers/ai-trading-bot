@@ -191,12 +191,17 @@ def _order_to_dict(o) -> dict[str, Any]:
     def _val(x):
         return x.value if hasattr(x, "value") else x
 
+    asset_class = _val(getattr(o, "asset_class", None)) or "us_equity"
+    order_class = getattr(o, "order_class", None)
     return {
         "id": str(o.id),
+        "client_order_id": getattr(o, "client_order_id", None),
         "symbol": o.symbol,
+        "asset_class": str(asset_class),
         "qty": float(o.qty) if o.qty else None,
         "side": str(_val(o.side)),
         "type": str(_val(o.order_type if hasattr(o, "order_type") else o.type)),
+        "order_class": str(_val(order_class)) if order_class else None,
         "time_in_force": str(_val(o.time_in_force)),
         "status": str(_val(o.status)),
         "limit_price": float(o.limit_price) if o.limit_price else None,
@@ -204,6 +209,7 @@ def _order_to_dict(o) -> dict[str, Any]:
         "filled_avg_price": float(o.filled_avg_price) if o.filled_avg_price else None,
         "filled_qty": float(o.filled_qty) if o.filled_qty else 0.0,
         "submitted_at": o.submitted_at.isoformat() if o.submitted_at else None,
+        "filled_at": o.filled_at.isoformat() if getattr(o, "filled_at", None) else None,
     }
 
 
@@ -225,71 +231,106 @@ def get_orders(status: str = "all") -> list[dict[str, Any]]:
         return mock.mock_orders(status)
 
 
+import re as _re
+
+# OCC option symbol: ROOT + YYMMDD + C|P + strike*1000 padded to 8.
+_OCC_RE = _re.compile(r"^[A-Z]{1,6}\d{6}[CP]\d{8}$")
+
+
+def _is_option_order(payload: dict[str, Any]) -> bool:
+    sym = (payload.get("symbol") or "").strip().upper()
+    return payload.get("asset_class") == "option" or bool(_OCC_RE.match(sym))
+
+
+def _mock_order_ack(payload: dict[str, Any], *, error: str | None = None) -> dict[str, Any]:
+    ack = {
+        "id": "mock-new-order",
+        "client_order_id": None,
+        "symbol": payload["symbol"].upper(),
+        "asset_class": "option" if _is_option_order(payload) else "us_equity",
+        "qty": float(payload["qty"]),
+        "side": payload["side"],
+        "type": payload.get("type", "market"),
+        "order_class": None,
+        "time_in_force": payload.get("time_in_force", "day"),
+        "status": "accepted",
+        "limit_price": payload.get("limit_price"),
+        "stop_price": payload.get("stop_price"),
+        "filled_avg_price": None,
+        "filled_qty": 0.0,
+        "submitted_at": mock.now_iso(),
+        "filled_at": None,
+    }
+    if error:
+        ack["error"] = error
+    return ack
+
+
 def place_order(payload: dict[str, Any]) -> dict[str, Any]:
     client = _get_trading()
     if client is None:
-        # Mock acknowledgement
-        return {
-            "id": "mock-new-order",
-            "symbol": payload["symbol"].upper(),
-            "qty": float(payload["qty"]),
-            "side": payload["side"],
-            "type": payload.get("type", "market"),
-            "time_in_force": payload.get("time_in_force", "day"),
-            "status": "accepted",
-            "limit_price": payload.get("limit_price"),
-            "stop_price": payload.get("stop_price"),
-            "filled_avg_price": None,
-            "filled_qty": 0.0,
-            "submitted_at": mock.now_iso(),
-        }
+        ack = _mock_order_ack(payload)
+        ack["raw"] = {"mock": True, "reason": "no_alpaca_client"}
+        return ack
+
+    is_option = _is_option_order(payload)
     try:
         side = OrderSide.BUY if payload["side"].lower() == "buy" else OrderSide.SELL
         tif_map = {
             "day": TimeInForce.DAY, "gtc": TimeInForce.GTC, "ioc": TimeInForce.IOC,
             "fok": TimeInForce.FOK, "opg": TimeInForce.OPG, "cls": TimeInForce.CLS,
         }
-        tif = tif_map.get(payload.get("time_in_force", "day").lower(), TimeInForce.DAY)
+        tif_raw = payload.get("time_in_force", "day").lower()
         symbol = payload["symbol"].upper()
-        qty = float(payload["qty"])
         otype = payload.get("type", "market").lower()
 
-        take_profit = payload.get("take_profit")
-        stop_loss = payload.get("stop_loss")
-        bracket = take_profit is not None and stop_loss is not None
-
-        common: dict[str, Any] = {"symbol": symbol, "qty": qty, "side": side, "time_in_force": tif}
-        if bracket:
-            common["order_class"] = OrderClass.BRACKET
-            common["take_profit"] = TakeProfitRequest(limit_price=float(take_profit))
-            common["stop_loss"] = StopLossRequest(stop_price=float(stop_loss))
-
-        if otype == "limit":
-            req = LimitOrderRequest(limit_price=float(payload["limit_price"]), **common)
-        elif otype == "stop":
-            req = StopOrderRequest(stop_price=float(payload["stop_price"]), **common)
+        if is_option:
+            # Options constraints: whole-number qty; market/limit/stop/stop_limit
+            # single-leg; tif in {day, gtc}; no bracket; no extended hours.
+            qty = float(int(round(float(payload["qty"]))))
+            tif = TimeInForce.GTC if tif_raw == "gtc" else TimeInForce.DAY
+            common: dict[str, Any] = {
+                "symbol": symbol, "qty": qty, "side": side,
+                "time_in_force": tif, "extended_hours": False,
+            }
+            if otype == "limit":
+                req = LimitOrderRequest(limit_price=float(payload["limit_price"]), **common)
+            elif otype == "stop":
+                req = StopOrderRequest(stop_price=float(payload["stop_price"]), **common)
+            else:
+                req = MarketOrderRequest(**common)
         else:
-            req = MarketOrderRequest(**common)
+            tif = tif_map.get(tif_raw, TimeInForce.DAY)
+            qty = float(payload["qty"])
+            take_profit = payload.get("take_profit")
+            stop_loss = payload.get("stop_loss")
+            bracket = take_profit is not None and stop_loss is not None
+            common = {"symbol": symbol, "qty": qty, "side": side, "time_in_force": tif}
+            if bracket:
+                common["order_class"] = OrderClass.BRACKET
+                common["take_profit"] = TakeProfitRequest(limit_price=float(take_profit))
+                common["stop_loss"] = StopLossRequest(stop_price=float(stop_loss))
+            if otype == "limit":
+                req = LimitOrderRequest(limit_price=float(payload["limit_price"]), **common)
+            elif otype == "stop":
+                req = StopOrderRequest(stop_price=float(payload["stop_price"]), **common)
+            else:
+                req = MarketOrderRequest(**common)
 
         o = client.submit_order(order_data=req)
-        return _order_to_dict(o)
+        out = _order_to_dict(o)
+        if is_option:
+            out["asset_class"] = "option"
+        try:
+            out["raw"] = o.model_dump(mode="json") if hasattr(o, "model_dump") else dict(o)
+        except Exception:
+            out["raw"] = {"id": out.get("id")}
+        return out
     except Exception as exc:
         logger.warning("place_order failed (%s) — returning mock ack.", exc)
-        return {
-            "id": "mock-new-order",
-            "symbol": payload["symbol"].upper(),
-            "qty": float(payload["qty"]),
-            "side": payload["side"],
-            "type": payload.get("type", "market"),
-            "time_in_force": payload.get("time_in_force", "day"),
-            "status": "accepted",
-            "limit_price": payload.get("limit_price"),
-            "stop_price": payload.get("stop_price"),
-            "filled_avg_price": None,
-            "filled_qty": 0.0,
-            "submitted_at": mock.now_iso(),
-            "error": str(exc),
-        }
+        ack = _mock_order_ack(payload, error=str(exc))
+        ack["raw"] = {"mock": True, "error": str(exc)}
+        return ack
 
 
 def cancel_order(order_id: str) -> dict[str, Any]:

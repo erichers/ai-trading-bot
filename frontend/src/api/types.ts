@@ -6,6 +6,9 @@ export interface Health {
   anthropic_configured: boolean;
   paper: boolean;
   market_open: boolean;
+  research_provider?: string;
+  research_model?: string;
+  ollama_connected?: boolean;
 }
 
 export interface Account {
@@ -253,6 +256,66 @@ export interface Regime {
   vix_proxy: number;
   breadth: number;
   note: string;
+}
+
+export type AssetClass = 'us_equity' | 'option';
+export type TradeSource = 'manual' | 'strategy' | 'ai';
+
+// Full persisted trade ledger row from MySQL.
+export interface Trade {
+  id: number | string;
+  alpaca_order_id: string | null;
+  client_order_id: string | null;
+  symbol: string;
+  asset_class: AssetClass;
+  side: OrderSide;
+  qty: number;
+  order_type: string;
+  order_class: string | null;
+  time_in_force: string;
+  limit_price: number | null;
+  stop_price: number | null;
+  take_profit: number | null;
+  stop_loss: number | null;
+  status: string;
+  filled_qty: number;
+  filled_avg_price: number | null;
+  submitted_at: string | null;
+  filled_at: string | null;
+  source: TradeSource;
+  strategy_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type TradeStatusFilter = 'all' | 'open' | 'filled' | 'canceled';
+
+export interface ResearchHistoryItem {
+  id: number | string;
+  symbol: string;
+  thesis: string;
+  sentiment_score: number;
+  conviction: number;
+  key_risks: string[];
+  suggested_action: string;
+  suggested_stop: number;
+  suggested_target: number;
+  regime: string;
+  bear_case: string;
+  provider: string;
+  model: string;
+  generated_at: string;
+}
+
+export interface SignalHistoryItem {
+  id: number | string;
+  strategy_id: string;
+  symbol: string;
+  timeframe: string;
+  fired: boolean;
+  matched: { indicator: string; operator: string; value: string | number; result: boolean }[];
+  snapshot: Record<string, number>;
+  created_at: string;
 }
 
 export type Timeframe = '1Min' | '5Min' | '15Min' | '1Hour' | '1Day';

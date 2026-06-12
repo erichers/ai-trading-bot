@@ -2,7 +2,10 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
 
-export default defineConfig({
+// In dev we serve from root ('/') and use Vite's proxy; in a production build
+// the app is served by MAMP/Apache under http://localhost:8888/sandbox/.
+export default defineConfig(({ command }) => ({
+  base: command === 'build' ? '/sandbox/' : '/',
   plugins: [react()],
   resolve: {
     alias: {
@@ -23,4 +26,4 @@ export default defineConfig({
       },
     },
   },
-});
+}));

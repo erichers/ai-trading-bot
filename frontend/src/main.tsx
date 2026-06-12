@@ -12,26 +12,34 @@ import { Strategies } from './views/Strategies';
 import { Research } from './views/Research';
 import { News } from './views/News';
 import { PositionsOrders } from './views/PositionsOrders';
+import { Trades } from './views/Trades';
 import { SettingsView } from './views/Settings';
 import { Help } from './views/Help';
 
-const router = createBrowserRouter([
-  {
-    path: '/',
-    element: <Layout />,
-    children: [
-      { index: true, element: <Dashboard /> },
-      { path: 'tickers', element: <Tickers /> },
-      { path: 'options', element: <OptionsFlowView /> },
-      { path: 'strategies', element: <Strategies /> },
-      { path: 'research', element: <Research /> },
-      { path: 'news', element: <News /> },
-      { path: 'positions', element: <PositionsOrders /> },
-      { path: 'settings', element: <SettingsView /> },
-      { path: 'help', element: <Help /> },
-    ],
-  },
-]);
+// Match the served base path (e.g. '/sandbox' under Apache) so router links resolve.
+const basename = import.meta.env.BASE_URL.replace(/\/$/, '') || '/';
+
+const router = createBrowserRouter(
+  [
+    {
+      path: '/',
+      element: <Layout />,
+      children: [
+        { index: true, element: <Dashboard /> },
+        { path: 'tickers', element: <Tickers /> },
+        { path: 'options', element: <OptionsFlowView /> },
+        { path: 'strategies', element: <Strategies /> },
+        { path: 'research', element: <Research /> },
+        { path: 'news', element: <News /> },
+        { path: 'positions', element: <PositionsOrders /> },
+        { path: 'trades', element: <Trades /> },
+        { path: 'settings', element: <SettingsView /> },
+        { path: 'help', element: <Help /> },
+      ],
+    },
+  ],
+  { basename },
+);
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

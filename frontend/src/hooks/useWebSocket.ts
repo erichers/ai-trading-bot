@@ -35,7 +35,11 @@ export function useWebSocket(): WSHook {
 
   const connect = useCallback(() => {
     const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
-    const url = `${proto}://${window.location.host}/ws`;
+    // Honor Vite's base path so the WS resolves under /sandbox/ws behind Apache.
+    const base = import.meta.env.BASE_URL.endsWith('/')
+      ? import.meta.env.BASE_URL
+      : `${import.meta.env.BASE_URL}/`;
+    const url = `${proto}://${window.location.host}${base}ws`;
     let ws: WebSocket;
     try {
       ws = new WebSocket(url);

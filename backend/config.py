@@ -31,9 +31,23 @@ class Settings(BaseSettings):
     alpaca_secret_key: str = ""
     alpaca_api_base_url: str = "https://paper-api.alpaca.markets/v2"
     alpaca_paper_trade: bool = True
+    alpaca_options_feed: str = "indicative"
     anthropic_api_key: str = ""
 
-    # SQLite DB lives inside backend/
+    # Research provider (local Ollama by default).
+    research_provider: str = "ollama"
+    ollama_base_url: str = "http://localhost:11434"
+    research_model: str = "gemma4:e2b"
+
+    # MySQL database (MAMP defaults).
+    db_host: str = "127.0.0.1"
+    db_port: int = 8889
+    db_user: str = "root"
+    db_password: str = "root"
+    db_name: str = "trading_terminal"
+    database_url: str = "mysql+pymysql://root:root@127.0.0.1:8889/trading_terminal"
+
+    # SQLite DB path retained for backwards-compat (no longer the primary store).
     db_path: str = str(Path(__file__).resolve().parent / "trading.db")
 
     @property
