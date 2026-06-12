@@ -7,6 +7,26 @@
   </head>
   <body>
     <div id="root"></div>
+    <script>
+      // Surface boot-time crashes instead of a silent blank screen.
+      (function () {
+        function show(title, msg, stack) {
+          var r = document.getElementById('root');
+          if (!r || r.getAttribute('data-booted') === '1') return;
+          r.innerHTML =
+            '<pre style="color:#ff6b6b;background:#0a0b0d;padding:24px;margin:0;' +
+            'font:12px/1.5 ui-monospace,monospace;white-space:pre-wrap;min-height:100vh">' +
+            '⚠ ' + title + '\n\n' + (msg || '') + '\n\n' + (stack || '') + '</pre>';
+        }
+        window.addEventListener('error', function (e) {
+          show('Boot error', (e && (e.message || (e.error && e.error.message))), e && e.error && e.error.stack);
+        });
+        window.addEventListener('unhandledrejection', function (e) {
+          var r = e && e.reason;
+          show('Unhandled rejection', r && (r.message || r) , r && r.stack);
+        });
+      })();
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

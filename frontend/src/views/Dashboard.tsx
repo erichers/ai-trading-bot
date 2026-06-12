@@ -2,11 +2,12 @@ import * as React from 'react';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { X, Sparkles, ChevronDown, ChevronRight, Zap, GripVertical, RotateCcw } from 'lucide-react';
-import RGL from 'react-grid-layout';
+import * as RGLNamespace from 'react-grid-layout';
 
-// react-grid-layout ships `export =` typings whose namespace members aren't
-// importable by name under bundler resolution; pull them off the default.
-const { Responsive, WidthProvider } = RGL as unknown as {
+// react-grid-layout's CJS exposes Responsive/WidthProvider as NAMED exports;
+// the default export is only the basic GridLayout (no namespace members), so
+// pull them off the module namespace instead.
+const { Responsive, WidthProvider } = RGLNamespace as unknown as {
   Responsive: React.ComponentType<Record<string, unknown>>;
   WidthProvider: <P>(c: React.ComponentType<P>) => React.ComponentType<P>;
 };
