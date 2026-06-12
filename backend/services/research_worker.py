@@ -21,6 +21,13 @@ from services import research as research_svc
 
 WORKER_KEY = "research_worker"
 
+# MAG7 universe for earnings research. The three priority names get an 'earnings'
+# deep_research doc EVERY cycle at depth='deep'; the rest rotate one-per-cycle at
+# standard depth so the DB steadily accumulates earnings research for all seven.
+MAG7 = ["TSLA", "META", "NVDA", "AAPL", "MSFT", "GOOGL", "AMZN"]
+MAG7_PRIORITY = ["TSLA", "META", "NVDA"]
+MAG7_ROTATION = ["AAPL", "MSFT", "GOOGL", "AMZN"]
+
 # Continuous worker defaults to provider='gemma' (free/local) so 24/7 runs never
 # spend Kimi cloud credits. Kimi is reserved for on-demand, user-initiated calls.
 DEFAULT_CONFIG: dict[str, Any] = {
@@ -158,6 +165,32 @@ def _deep_once(symbol: str, kind: str, provider: str) -> None:
         logger.warning("worker: deep generation failed for %s (%s).", symbol, exc)
 
 
+def _earnings_once(symbol: str, provider: str) -> None:
+    """Blocking: generate an honest, news-based earnings deep_research doc.
+
+    Uses the forced provider (default 'gemma'/local) — NO Kimi spend in the
+    background worker. On failure: log + skip (never fabricate)."""
+    try:
+        doc = research_svc.generate_earnings(symbol, provider=provider)
+        db.insert_deep_research(doc)
+        logger.info("research worker: earnings doc for %s via %s.", symbol, provider)
+    except Exception as exc:
+        logger.warning("worker: earnings generation failed for %s (%s).", symbol, exc)
+
+
+def _earnings_targets() -> list[tuple[str, str]]:
+    """Return [(symbol, depth)] for this cycle's earnings research.
+
+    TSLA/META/NVDA every cycle at depth='deep'. The remaining MAG7 names
+    (AAPL/MSFT/GOOGL/AMZN) rotate one per cycle at standard depth.
+    """
+    targets: list[tuple[str, str]] = [(s, "deep") for s in MAG7_PRIORITY]
+    if MAG7_ROTATION:
+        idx = _state.get("cycles", 0) % len(MAG7_ROTATION)
+        targets.append((MAG7_ROTATION[idx], "standard"))
+    return targets
+
+
 async def _run_cycle() -> None:
     cfg = get_config()
     universe = list(cfg.get("universe") or [])
@@ -184,11 +217,20 @@ async def _run_cycle() -> None:
     # One market briefing per cycle (same forced provider).
     await asyncio.to_thread(_briefing_once, provider)
 
+    # Earnings research for MAG7 so the DB accumulates earnings docs. TSLA/META/
+    # NVDA every cycle (deep); the rest rotate. Sequential + small sleeps so we
+    # never hammer Ollama. Same forced provider (Gemma) — no Kimi spend.
+    for sym, _depth in _earnings_targets():
+        if not get_config().get("enabled", True):
+            logger.info("research worker: disabled mid-earnings — stopping.")
+            return
+        await asyncio.to_thread(_earnings_once, sym, provider)
+        await asyncio.sleep(_SYMBOL_SLEEP)
+
     # Occasionally produce a deep dive on a rotating symbol (same forced provider).
     if universe:
         idx = _state.get("cycles", 0) % len(universe)
-        kind = "earnings" if (_state.get("cycles", 0) % 2 == 1) else "deep"
-        await asyncio.to_thread(_deep_once, universe[idx], kind, provider)
+        await asyncio.to_thread(_deep_once, universe[idx], "deep", provider)
 
     _state["cycles"] = _state.get("cycles", 0) + 1
     _state["last_run"] = datetime.now(timezone.utc).isoformat()

@@ -578,6 +578,41 @@ export interface Proposal {
 // /evaluate and /run may return { proposals } or a bare array — handle both.
 export type ProposalsResponse = { proposals: Proposal[] } | Proposal[];
 
+// ---- DB Chat (Vanna-style natural-language → SQL) ------------------------
+
+export interface ChatMessageTurn {
+  role: string;
+  content: string;
+}
+
+export interface ChatResponse {
+  answer: string;
+  sql?: string;
+  rows?: Record<string, unknown>[];
+  columns?: string[];
+  mode: 'sql' | 'chat';
+  error?: string;
+}
+
+export interface ChatSchemaColumn {
+  name: string;
+  type: string;
+}
+
+export interface ChatSchemaTable {
+  table: string;
+  columns: ChatSchemaColumn[];
+}
+
+// Backend may return { tables: [...] } or a bare list — handle both.
+export type ChatSchemaResponse = { tables: ChatSchemaTable[] } | ChatSchemaTable[];
+
+export interface ChatHistoryMessage {
+  role: string;
+  content: string;
+  created_at?: string;
+}
+
 export interface WSMessage {
   type: 'quote' | 'news' | 'signal';
   [key: string]: unknown;

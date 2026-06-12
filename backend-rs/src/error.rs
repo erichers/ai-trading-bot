@@ -11,6 +11,14 @@ pub struct ApiError {
     pub detail: String,
 }
 
+impl std::fmt::Display for ApiError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.detail)
+    }
+}
+
+impl std::error::Error for ApiError {}
+
 impl ApiError {
     pub fn new(status: StatusCode, detail: impl Into<String>) -> Self {
         ApiError {

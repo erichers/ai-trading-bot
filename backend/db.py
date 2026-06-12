@@ -5,6 +5,7 @@ briefings. JSON columns hold nested structures (MySQL 8 native JSON).
 """
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -328,6 +329,28 @@ class Bot(Base):
             "action": self.action or dict(DEFAULT_OPTION_ACTION),
             "mode": self.mode,
             "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class AppKnowledge(Base):
+    """Curated, seeded docs describing THIS app so the chat can answer questions
+    about it. Upserted by topic on each startup seed (see seed_app_knowledge)."""
+    __tablename__ = "app_knowledge"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    topic: Mapped[str] = mapped_column(String(64), index=True, unique=True)
+    title: Mapped[str] = mapped_column(String(255))
+    body: Mapped[Optional[str]] = mapped_column(MEDIUMTEXT, nullable=True)
+    tags: Mapped[Any] = mapped_column(JSON, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "topic": self.topic,
+            "title": self.title,
+            "body": self.body or "",
+            "tags": self.tags or [],
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
 
@@ -847,6 +870,64 @@ def list_chat_messages(limit: int = 50) -> list[dict[str, Any]]:
         stmt = select(ChatMessage).order_by(ChatMessage.id.desc()).limit(limit)
         rows = list(s.scalars(stmt).all())
         return [r.to_dict() for r in reversed(rows)]
+
+
+# ---- App knowledge ----------------------------------------------------------
+def upsert_app_knowledge(doc: dict[str, Any]) -> dict[str, Any]:
+    """Insert or update an app_knowledge row keyed on ``topic`` (idempotent seed)."""
+    topic = (doc.get("topic") or "").strip()
+    with SessionLocal() as s:
+        obj = s.scalars(select(AppKnowledge).where(AppKnowledge.topic == topic)).first()
+        if obj is None:
+            obj = AppKnowledge(topic=topic)
+            s.add(obj)
+        obj.title = doc.get("title", obj.title or topic)
+        obj.body = doc.get("body", obj.body)
+        obj.tags = doc.get("tags", obj.tags)
+        obj.updated_at = _now()
+        s.commit()
+        return obj.to_dict()
+
+
+def insert_app_knowledge(doc: dict[str, Any]) -> dict[str, Any]:
+    """Alias for upsert (topic is unique) — kept for a clear insert call site."""
+    return upsert_app_knowledge(doc)
+
+
+def list_app_knowledge(topic: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
+    with SessionLocal() as s:
+        stmt = select(AppKnowledge).order_by(AppKnowledge.topic.asc())
+        if topic:
+            stmt = stmt.where(AppKnowledge.topic == topic.strip())
+        stmt = stmt.limit(limit)
+        return [r.to_dict() for r in s.scalars(stmt).all()]
+
+
+def search_app_knowledge(query: str, limit: int = 4) -> list[dict[str, Any]]:
+    """Simple keyword match of ``query`` against topic/title/tags/body.
+
+    Ranks rows by the number of distinct query tokens that appear, breaking ties
+    by a tighter title/topic/tag match. Returns up to ``limit`` rows."""
+    q = (query or "").strip().lower()
+    rows = list_app_knowledge(limit=500)
+    if not q:
+        return rows[:limit]
+    tokens = [t for t in re.split(r"[^a-z0-9]+", q) if len(t) > 2]
+    if not tokens:
+        tokens = [q]
+    scored: list[tuple[int, int, dict[str, Any]]] = []
+    for r in rows:
+        hay_strong = " ".join([
+            r.get("topic", ""), r.get("title", ""),
+            " ".join(str(t) for t in (r.get("tags") or [])),
+        ]).lower()
+        hay_body = (r.get("body") or "").lower()
+        body_hits = sum(1 for t in tokens if t in hay_body or t in hay_strong)
+        strong_hits = sum(1 for t in tokens if t in hay_strong)
+        if body_hits or strong_hits:
+            scored.append((body_hits + strong_hits, strong_hits, r))
+    scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    return [r for _, __, r in scored[:limit]]
 
 
 # ---- Safe read-only SQL (for the chat text-to-SQL feature) ------------------

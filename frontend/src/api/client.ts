@@ -4,6 +4,11 @@ import type {
   Bar,
   Bot,
   Briefing,
+  ChatHistoryMessage,
+  ChatMessageTurn,
+  ChatResponse,
+  ChatSchemaResponse,
+  ChatSchemaTable,
   Clock,
   Health,
   KillSwitchResult,
@@ -234,7 +239,25 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ place }),
     }).then(normalizeProposals),
+
+  // ---- DB Chat (Vanna-style NL → SQL via Gemma) -------------------------
+  // Gemma can take 10–60s; no client timeout is imposed (fetch waits).
+  chat: (message: string, history?: ChatMessageTurn[]) =>
+    request<ChatResponse>('/chat', {
+      method: 'POST',
+      body: JSON.stringify({ message, history }),
+    }),
+  chatSchema: () =>
+    request<ChatSchemaResponse>('/chat/schema').then(normalizeSchema),
+  chatHistory: (limit = 50) =>
+    request<ChatHistoryMessage[]>(`/chat/history${qs({ limit })}`),
 };
+
+// Backend may return { tables: [...] } or a bare ChatSchemaTable[] — normalize.
+function normalizeSchema(res: ChatSchemaResponse): ChatSchemaTable[] {
+  if (Array.isArray(res)) return res;
+  return res?.tables ?? [];
+}
 
 // Backend may return { proposals: [...] } or a bare Proposal[] — normalize both.
 function normalizeProposals(res: ProposalsResponse): Proposal[] {

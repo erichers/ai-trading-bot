@@ -13,6 +13,7 @@ import db
 from config import logger, settings
 from models import HealthResponse
 from routers import (
+    app_knowledge,
     bots,
     chat,
     indicators_router,
@@ -36,6 +37,11 @@ from services.realtime import RealtimeBroadcaster
 async def lifespan(app: FastAPI):
     # Startup: init schema + seed, then launch the background research worker.
     db.init_db()
+    try:
+        from services import app_knowledge
+        app_knowledge.seed_app_knowledge()
+    except Exception as exc:  # never block startup
+        logger.warning("app_knowledge seed failed (%s).", exc)
     try:
         research_worker.start()
     except Exception as exc:  # never block startup
@@ -119,6 +125,7 @@ for r in (
     risk.router,
     bots.router,
     chat.router,
+    app_knowledge.router,
 ):
     app.include_router(r, prefix="/api")
 

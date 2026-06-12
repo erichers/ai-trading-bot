@@ -62,6 +62,11 @@ SCHEMA: list[dict[str, Any]] = [
     {"table": "watchlist", "columns": [
         {"name": "symbol", "type": "string"}, {"name": "added_at", "type": "datetime"},
     ]},
+    {"table": "app_knowledge", "columns": [
+        {"name": "id", "type": "int"}, {"name": "topic", "type": "string"},
+        {"name": "title", "type": "string"}, {"name": "body", "type": "text"},
+        {"name": "tags", "type": "json"}, {"name": "updated_at", "type": "datetime"},
+    ]},
 ]
 
 _ALLOWED_TABLES = {t["table"] for t in SCHEMA}
@@ -167,20 +172,42 @@ def _summarize_rows(message: str, sql: str, result: dict[str, Any]) -> str:
         return f"The query returned {len(rows)} row(s). Columns: {', '.join(cols)}."
 
 
+def _knowledge_context(message: str) -> str:
+    """Top app_knowledge docs relevant to the question (keyword-matched)."""
+    try:
+        docs = db.search_app_knowledge(message, limit=4)
+    except Exception as exc:
+        logger.warning("chat: app_knowledge search failed (%s).", exc)
+        return ""
+    if not docs:
+        return ""
+    blocks = []
+    for d in docs:
+        body = (d.get("body") or "")[:1500]
+        blocks.append(f"### {d.get('title', d.get('topic', ''))}\n{body}")
+    return (
+        "Authoritative app documentation (ground your answer in this; do not "
+        "contradict it):\n\n" + "\n\n".join(blocks)
+    )
+
+
 def _chat_answer(message: str, history: list[dict[str, Any]] | None) -> str:
     hist = ""
     for h in (history or [])[-6:]:
         hist += f"{h.get('role', 'user')}: {h.get('content', '')}\n"
+    knowledge = _knowledge_context(message)
     user = (
         f"{_app_context()}\n\n"
+        f"{knowledge}\n\n"
         f"Conversation so far:\n{hist}\n"
         f"User question: {message}\n\n"
-        "Answer helpfully in concise markdown."
+        "Answer helpfully in concise markdown, grounded in the app documentation above."
     )
     try:
         return research_svc._ollama_chat(
             "You are the assistant inside an AI trading terminal app. Be concise, "
-            "concrete, and helpful. Plain markdown, no JSON.",
+            "concrete, and helpful. Ground answers about the app in the supplied "
+            "documentation. Plain markdown, no JSON.",
             user, json_format=False, num_predict=500,
         ).strip()
     except Exception as exc:

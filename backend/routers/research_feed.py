@@ -89,7 +89,10 @@ def deep_get(deep_id: int):
 @router.post("/deep")
 def deep_create(body: DeepResearchRequest):
     try:
-        doc = research_svc.generate_deep(body.symbol, body.kind)
+        if body.kind == "earnings":
+            doc = research_svc.generate_earnings(body.symbol)
+        else:
+            doc = research_svc.generate_deep(body.symbol, body.kind)
     except research_svc.ResearchUnavailable as exc:
         raise HTTPException(status_code=503, detail=f"Deep research unavailable: {exc}")
     try:

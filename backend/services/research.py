@@ -15,7 +15,7 @@ from typing import Any
 import httpx
 
 from config import logger, settings
-from services import alpaca_service, indicators, kimi
+from services import alpaca_service, indicators, kimi, transcripts
 
 _OLLAMA_TIMEOUT = 120.0
 
@@ -408,6 +408,165 @@ def generate_deep(symbol: str, kind: str = "deep", *,
         },
         "provider": provider_used,
         "model": model,
+        "generated_at": _now(),
+    }
+
+
+# ---- Earnings research (honest, real-news-based) ----------------------------
+# Keywords used to scan REAL Alpaca news for earnings/guidance/results items.
+_EARNINGS_KEYWORDS = (
+    "earnings", "quarter", "q1", "q2", "q3", "q4", "guidance", "results",
+    "revenue", "eps", "profit", "outlook", "forecast", "beat", "miss",
+    "deliveries", "margin", "report", "fiscal", "guided",
+)
+
+_EARNINGS_SYSTEM = (
+    "You are a senior equity research analyst writing an internal EARNINGS report "
+    "in GitHub-flavored markdown. You synthesize from the supplied news headlines "
+    "and price action ONLY. You MUST NOT invent specific figures, dates, or quotes "
+    "that are not present in the supplied material — if a number was not given, say "
+    "so explicitly (e.g. 'not disclosed in available headlines'). Be decisive but "
+    "honest about uncertainty. Never claim to quote a transcript."
+)
+
+
+def _earnings_provenance(model: str) -> str:
+    return (
+        f"> **Provenance:** Synthesized by {model} from Alpaca news headlines and "
+        "price action — NOT a verbatim earnings-call transcript. No verified "
+        "transcript feed is wired; figures are indicative and drawn only from the "
+        "headlines listed below.\n\n"
+    )
+
+
+def _is_earnings_news(item: dict[str, Any]) -> bool:
+    text_blob = f"{item.get('headline', '')} {item.get('summary', '')}".lower()
+    return any(kw in text_blob for kw in _EARNINGS_KEYWORDS)
+
+
+def generate_earnings(symbol: str, *, provider: str | None = None) -> dict[str, Any]:
+    """Build an honest, earnings-focused markdown report for ``symbol``.
+
+    Pulls REAL Alpaca news, scans it for earnings/guidance/results items, adds
+    recent bars + indicators, and asks the LLM (Gemma by default in the worker)
+    to produce a structured earnings report. The report ALWAYS carries a clear
+    provenance disclaimer that it is synthesized — NOT a verbatim transcript.
+
+    If a real transcript provider is configured (env ``TRANSCRIPT_API_KEY``), its
+    verified transcript is included as primary-source context; otherwise it is
+    skipped gracefully and NO transcript is fabricated.
+
+    provider: when given, ONLY that provider is used (no fallback). 'gemma'
+    aliases to 'ollama'. When None the configured fallback order is used.
+    """
+    symbol = symbol.upper()
+    forced = _normalize_provider(provider)
+
+    bars = alpaca_service.get_bars(symbol, "1Day", 120)
+    ind = indicators.compute_all(bars)
+    snapshot = alpaca_service.get_snapshot(symbol)
+    # Pull a wider news window, then prioritize earnings-relevant items.
+    all_news = _safe_news([symbol], 30)
+    earnings_news = [n for n in all_news if _is_earnings_news(n)]
+    # Use earnings-tagged items first; fall back to general headlines for context.
+    used_news = (earnings_news or all_news)[:12]
+
+    # Optional REAL transcript (skipped gracefully when unconfigured — NO mock).
+    transcript = None
+    try:
+        transcript = transcripts.fetch_transcript(symbol)
+    except Exception as exc:
+        logger.info("earnings: transcript fetch skipped for %s (%s).", symbol, exc)
+
+    recent_bars = bars[-30:]
+    bar_lines = "\n".join(
+        f"{b.get('t', '')[:10]} O{b['o']} H{b['h']} L{b['l']} C{b['c']} V{b['v']}"
+        for b in recent_bars
+    )
+    news_lines = "\n".join(
+        f"- [{(n.get('created_at') or '')[:10]}] {n['headline']} "
+        f"({n.get('source', '')})"
+        + (f" — {n.get('summary', '')[:160]}" if n.get("summary") else "")
+        for n in used_news
+    )
+
+    transcript_block = ""
+    if transcript and transcript.get("text"):
+        transcript_block = (
+            "\n\nVERIFIED EARNINGS TRANSCRIPT (primary source — quote freely):\n"
+            f"{transcript['text'][:6000]}\n"
+        )
+
+    ask = (
+        f"Write an EARNINGS-FOCUSED markdown research report for {symbol}. Use ONLY "
+        "the supplied news headlines and price action. Sections:\n"
+        "## Latest-quarter themes\n"
+        "## Guidance & outlook\n"
+        "## KPIs mentioned in the news\n"
+        "## Price/volume reaction\n"
+        "## What to watch next\n"
+        "## Bull case\n## Bear case\n\n"
+        "For any KPI or figure not present in the headlines, write 'not disclosed in "
+        "available headlines'. Be explicit that the earnings detail is synthesized "
+        "from news, not a verified transcript."
+    )
+
+    user = (
+        f"{ask}\n\n"
+        f"Latest snapshot: {json.dumps(snapshot)}\n\n"
+        f"Indicator snapshot: {json.dumps(ind)}\n\n"
+        f"Recent daily bars (oldest->newest):\n{bar_lines}\n\n"
+        f"Earnings-relevant headlines ({len(earnings_news)} of {len(all_news)} "
+        f"matched earnings keywords):\n{news_lines or '(none found)'}"
+        f"{transcript_block}\n\n"
+        "Return ONLY markdown (no JSON, no preamble)."
+    )
+
+    provider_used = None
+    model = None
+    body = ""
+    last_err: Exception | None = None
+    for prov in ([forced] if forced else _provider_order()):
+        try:
+            content, mdl = _call_provider(
+                prov, _EARNINGS_SYSTEM, user, json_format=False, num_predict=1400)
+            content = (content or "").strip()
+            if content:
+                provider_used, model, body = prov, mdl, content
+                break
+        except Exception as exc:
+            last_err = exc
+            logger.warning("generate_earnings via %s failed for %s (%s) — trying next.",
+                           prov, symbol, exc)
+
+    if not body:
+        raise ResearchUnavailable(
+            f"earnings research unavailable for {symbol}: {last_err or 'empty response'}")
+
+    display_model = model or settings.research_model
+    title = f"{symbol} earnings research"
+    full_body = (
+        _earnings_provenance(display_model)
+        + body
+        + "\n\n---\n### Source headlines\n"
+        + (news_lines or "_(no earnings-relevant headlines available)_")
+    )
+    return {
+        "symbol": symbol,
+        "kind": "earnings",
+        "title": title,
+        "body": full_body,
+        "data": {
+            "snapshot": snapshot,
+            "indicators": ind,
+            "news": used_news,
+            "earnings_news_count": len(earnings_news),
+            "total_news_count": len(all_news),
+            "transcript_source": (transcript or {}).get("source") if transcript else None,
+            "transcript_used": bool(transcript and transcript.get("text")),
+        },
+        "provider": provider_used,
+        "model": display_model,
         "generated_at": _now(),
     }
 

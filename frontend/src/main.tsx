@@ -11,6 +11,7 @@ import { OptionsFlowView } from './views/OptionsFlow';
 import { Strategies } from './views/Strategies';
 import { Builder } from './views/Builder';
 import { Research } from './views/Research';
+import { Chat } from './views/Chat';
 import { News } from './views/News';
 import { PositionsOrders } from './views/PositionsOrders';
 import { Trades } from './views/Trades';
@@ -34,6 +35,7 @@ const router = createBrowserRouter(
         { path: 'strategies', element: <Strategies /> },
         { path: 'builder', element: <Builder /> },
         { path: 'research', element: <Research /> },
+        { path: 'chat', element: <Chat /> },
         { path: 'news', element: <News /> },
         { path: 'positions', element: <PositionsOrders /> },
         { path: 'trades', element: <Trades /> },
