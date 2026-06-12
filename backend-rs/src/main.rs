@@ -17,16 +17,47 @@ mod state;
 mod worker;
 
 use axum::extract::{Path, Query, State, WebSocketUpgrade};
-use axum::http::StatusCode;
-use axum::response::IntoResponse;
+use axum::http::{header, StatusCode, Uri};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use error::{ApiError, ApiResult};
+use rust_embed::RustEmbed;
 use serde_json::{json, Value};
 use state::AppState;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
+
+// The built React frontend is embedded directly into the binary at compile time,
+// so the app runs as a single self-contained native executable — no Apache/MAMP
+// web server needed. Build the frontend (base '/') BEFORE compiling.
+#[derive(RustEmbed)]
+#[folder = "../frontend/dist"]
+struct Assets;
+
+/// Serve an embedded static asset, falling back to index.html for SPA routes.
+async fn static_handler(uri: Uri) -> Response {
+    let mut path = uri.path().trim_start_matches('/').to_string();
+    if path.is_empty() {
+        path = "index.html".to_string();
+    }
+    match Assets::get(&path) {
+        Some(content) => {
+            let mime = mime_guess::from_path(&path).first_or_octet_stream();
+            ([(header::CONTENT_TYPE, mime.as_ref())], content.data).into_response()
+        }
+        // Unknown path with no file extension → SPA deep link → serve index.html.
+        None => match Assets::get("index.html") {
+            Some(index) => (
+                [(header::CONTENT_TYPE, "text/html")],
+                index.data,
+            )
+                .into_response(),
+            None => (StatusCode::NOT_FOUND, "frontend not embedded").into_response(),
+        },
+    }
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -133,12 +164,17 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .nest("/api", api)
         .route("/ws", get(ws_handler))
-        .route("/", get(root))
         .layer(cors)
-        .with_state(app_state);
+        .with_state(app_state)
+        // Everything else serves the embedded SPA (API/WS matched above first).
+        .fallback(static_handler);
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:8001").await?;
-    tracing::info!("AI Trading Terminal Backend (Rust) listening on :8001");
+    let port: u16 = std::env::var("PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(8001);
+    let listener = tokio::net::TcpListener::bind(("0.0.0.0", port)).await?;
+    tracing::info!("AI Trading Terminal (Rust, self-contained) listening on http://localhost:{port}");
     axum::serve(listener, app).await?;
     Ok(())
 }
@@ -180,10 +216,6 @@ async fn health(State(s): State<AppState>) -> Json<Value> {
         "worker_enabled": worker_cfg["enabled"].as_bool().unwrap_or(true),
         "worker_provider": worker_cfg["provider"].as_str().unwrap_or("gemma"),
     }))
-}
-
-async fn root() -> Json<Value> {
-    Json(json!({"service": "AI Trading Terminal Backend", "docs": "/docs", "health": "/api/health"}))
 }
 
 // ---- trading ----------------------------------------------------------------
