@@ -100,6 +100,13 @@ body {
   border-radius: 4px;
   opacity: 1;
 }
+/* When locked, the dashboard is fully interactive — hide grips + resize handles. */
+.layout.locked .drag-handle {
+  display: none;
+}
+.layout.locked .react-resizable-handle {
+  display: none;
+}
 /* drag handle grip in panel headers */
 .drag-handle {
   cursor: grab;

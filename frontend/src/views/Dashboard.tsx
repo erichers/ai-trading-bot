@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { X, Sparkles, ChevronDown, ChevronRight, Zap, GripVertical, RotateCcw } from 'lucide-react';
+import { X, Sparkles, ChevronDown, ChevronRight, Zap, GripVertical, RotateCcw, Move, Check, Lock } from 'lucide-react';
 import * as RGLNamespace from 'react-grid-layout';
 
 // react-grid-layout's CJS exposes Responsive/WidthProvider as NAMED exports;
@@ -500,9 +500,13 @@ function ActivityLog() {
 
 const ResponsiveGridLayout = WidthProvider(Responsive);
 
-const LAYOUT_KEY = 'tt_dashboard_layout';
-const GRID_COLS = 12;
+const LAYOUT_KEY = 'tt_dashboard_layouts';
 const ROW_HEIGHT = 30;
+// Smart autofit: fewer columns as the viewport shrinks so tiles reflow/stack
+// instead of getting crushed. react-grid-layout generates the per-breakpoint
+// layouts from `lg` for any breakpoint we haven't explicitly saved.
+const BREAKPOINTS = { lg: 1280, md: 996, sm: 768, xs: 480, xxs: 0 };
+const COLS = { lg: 12, md: 12, sm: 6, xs: 4, xxs: 1 };
 
 // 12-col grid. Strip full-width on top; chart large; AI feed tall on the right.
 const DEFAULT_LAYOUT: GridItem[] = [
@@ -523,34 +527,50 @@ const TILES: { i: string; render: () => ReactNode }[] = [
   { i: 'bots', render: () => <BotSetup /> },
 ];
 
-function loadLayout(): GridItem[] {
+// Ensure every known tile exists in a stored breakpoint layout (merge in any
+// newly-added tiles using their defaults).
+function mergeTiles(items: GridItem[]): GridItem[] {
+  const byId = new Map(items.map((l) => [l.i, l]));
+  return DEFAULT_LAYOUT.map((def) => byId.get(def.i) ?? def);
+}
+
+function loadLayouts(): GridLayouts {
   try {
     const raw = localStorage.getItem(LAYOUT_KEY);
-    if (!raw) return DEFAULT_LAYOUT;
-    const parsed = JSON.parse(raw) as GridItem[];
-    if (!Array.isArray(parsed)) return DEFAULT_LAYOUT;
-    // Ensure every known tile is present (merge in any newly-added tiles).
-    const byId = new Map(parsed.map((l) => [l.i, l]));
-    return DEFAULT_LAYOUT.map((def) => byId.get(def.i) ?? def);
+    if (raw) {
+      const parsed = JSON.parse(raw) as GridLayouts;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        const out: GridLayouts = {};
+        for (const k of Object.keys(parsed)) {
+          if (Array.isArray(parsed[k])) out[k] = mergeTiles(parsed[k]);
+        }
+        if (!out.lg) out.lg = DEFAULT_LAYOUT;
+        return out;
+      }
+    }
   } catch {
-    return DEFAULT_LAYOUT;
+    /* ignore */
   }
+  return { lg: DEFAULT_LAYOUT };
 }
 
 export function Dashboard() {
-  const [layout, setLayout] = useState<GridItem[]>(() => loadLayout());
+  const [layouts, setLayouts] = useState<GridLayouts>(() => loadLayouts());
+  // Default LOCKED: the whole dashboard is fully clickable/scrollable. Flip to
+  // "Arrange" to drag/resize tiles. This guarantees inner controls stay usable.
+  const [editing, setEditing] = useState(false);
 
-  const onLayoutChange = (current: GridItem[]) => {
-    setLayout(current);
+  const onLayoutChange = (_current: GridItem[], all: GridLayouts) => {
+    setLayouts(all);
     try {
-      localStorage.setItem(LAYOUT_KEY, JSON.stringify(current));
+      localStorage.setItem(LAYOUT_KEY, JSON.stringify(all));
     } catch {
       /* storage may be unavailable (private mode) — ignore */
     }
   };
 
   const resetLayout = () => {
-    setLayout(DEFAULT_LAYOUT);
+    setLayouts({ lg: DEFAULT_LAYOUT });
     try {
       localStorage.removeItem(LAYOUT_KEY);
     } catch {
@@ -558,31 +578,59 @@ export function Dashboard() {
     }
   };
 
-  const layouts: GridLayouts = useMemo(
-    () => ({ lg: layout, md: layout, sm: layout }),
-    [layout],
-  );
-
   return (
     <div className="h-full min-h-0 overflow-auto">
       <div className="flex items-center justify-between px-1 pb-1">
-        <span className="micro-label">Dashboard — drag handles to move, edges to resize</span>
-        <button className="btn flex items-center gap-1" onClick={resetLayout}>
-          <RotateCcw size={12} /> Reset layout
-        </button>
+        <span className="micro-label flex items-center gap-1.5">
+          {editing ? (
+            <>
+              <Move size={12} className="text-amber" /> Arrange mode — drag the grip to move, edges to resize
+            </>
+          ) : (
+            <>
+              <Lock size={11} /> Dashboard — interactive (click anywhere)
+            </>
+          )}
+        </span>
+        <div className="flex items-center gap-2">
+          {editing && (
+            <button className="btn flex items-center gap-1" onClick={resetLayout}>
+              <RotateCcw size={12} /> Reset
+            </button>
+          )}
+          <button
+            className={`btn flex items-center gap-1 ${editing ? 'btn-amber' : ''}`}
+            onClick={() => setEditing((e) => !e)}
+            title={editing ? 'Lock layout' : 'Rearrange tiles'}
+          >
+            {editing ? (
+              <>
+                <Check size={12} /> Done
+              </>
+            ) : (
+              <>
+                <Move size={12} /> Arrange
+              </>
+            )}
+          </button>
+        </div>
       </div>
       <ResponsiveGridLayout
-        className="layout"
+        className={`layout ${editing ? 'editing' : 'locked'}`}
         layouts={layouts}
-        breakpoints={{ lg: 1200, md: 900, sm: 0 }}
-        cols={{ lg: GRID_COLS, md: GRID_COLS, sm: GRID_COLS }}
+        breakpoints={BREAKPOINTS}
+        cols={COLS}
         rowHeight={ROW_HEIGHT}
         margin={[12, 12]}
         containerPadding={[4, 4]}
+        isDraggable={editing}
+        isResizable={editing}
         draggableHandle=".drag-handle"
+        draggableCancel="input,textarea,select,button,a,[role='button'],.no-drag"
         onLayoutChange={onLayoutChange}
         compactType="vertical"
         resizeHandles={['se']}
+        useCSSTransforms
       >
         {TILES.map((t) => (
           <div key={t.i}>{t.render()}</div>
