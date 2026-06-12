@@ -27,6 +27,12 @@ import type {
   RiskStatus,
   ResearchHistoryItem,
   ResearchReport,
+  ResearchWorker,
+  ResearchFeedItem,
+  ResearchDeepDoc,
+  ResearchDepth,
+  ResearchProvider,
+  RunOnceResult,
   SignalEvalResult,
   SignalHistoryItem,
   SnapshotMap,
@@ -156,15 +162,38 @@ export const api = {
       body: JSON.stringify({ symbol, timeframe, rules }),
     }),
 
-  analyze: (symbol: string) =>
+  analyze: (symbol: string, provider?: ResearchProvider, depth?: ResearchDepth) =>
     request<ResearchReport>('/research/analyze', {
       method: 'POST',
-      body: JSON.stringify({ symbol }),
+      body: JSON.stringify({ symbol, provider, depth }),
     }),
   briefing: () => request<Briefing>('/research/briefing'),
   regime: () => request<Regime>('/research/regime'),
   researchHistory: (symbol?: string, limit = 50) =>
     request<ResearchHistoryItem[]>(`/research/history${qs({ symbol, limit })}`),
+
+  // ---- Research worker (continuous background research) ------------------
+  researchWorker: () => request<ResearchWorker>('/research/worker'),
+  updateResearchWorker: (cfg: Partial<ResearchWorker>) =>
+    request<ResearchWorker>('/research/worker', {
+      method: 'PUT',
+      body: JSON.stringify(cfg),
+    }),
+  researchRunOnce: () =>
+    request<RunOnceResult>('/research/worker/run-once', { method: 'POST' }),
+
+  // ---- Research feed + deep-dive documents -------------------------------
+  researchFeed: (limit = 50) =>
+    request<ResearchFeedItem[]>(`/research/feed${qs({ limit })}`),
+  researchDeepList: (symbol?: string, kind?: string, limit = 50) =>
+    request<ResearchDeepDoc[]>(`/research/deep${qs({ symbol, kind, limit })}`),
+  researchDeepDoc: (id: number | string) =>
+    request<ResearchDeepDoc>(`/research/deep/${id}`),
+  researchDeepGenerate: (symbol: string, kind = 'deep') =>
+    request<ResearchDeepDoc>('/research/deep', {
+      method: 'POST',
+      body: JSON.stringify({ symbol, kind }),
+    }),
 
   trades: (status?: string, symbol?: string, limit = 100) =>
     request<Trade[]>(`/trades${qs({ status, symbol, limit })}`),

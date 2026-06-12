@@ -369,6 +369,56 @@ export interface ResearchHistoryItem {
   generated_at: string;
 }
 
+// ---- Research worker / feed / deep-dive ----------------------------------
+
+export type ResearchProvider = 'gemma' | 'kimi';
+export type ResearchDepth = 'quick' | 'standard' | 'deep';
+
+export interface ResearchWorker {
+  enabled: boolean;
+  provider: ResearchProvider;
+  depth: ResearchDepth;
+  interval_sec: number;
+  universe: string[];
+  running: boolean;
+  last_run: string | null;
+  count_today: number;
+  cycles: number;
+}
+
+export interface RunOnceResult {
+  ran: boolean;
+  count: number;
+}
+
+export type ResearchFeedSource = 'analysis' | 'deep' | 'earnings' | 'market' | 'briefing';
+
+export interface ResearchFeedItem {
+  id: number | string;
+  source: ResearchFeedSource;
+  symbol: string;
+  title: string;
+  summary: string;
+  conviction?: number;
+  sentiment_score?: number;
+  regime?: string;
+  provider: string;
+  model: string;
+  created_at: string;
+}
+
+export interface ResearchDeepDoc {
+  id: number | string;
+  symbol: string;
+  kind: string;
+  title: string;
+  summary: string;
+  body: string;
+  provider: string;
+  model: string;
+  created_at: string;
+}
+
 export interface SignalHistoryItem {
   id: number | string;
   strategy_id: string;

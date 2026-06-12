@@ -42,6 +42,33 @@ def _provider_order() -> list[str]:
     return out or ["ollama"]
 
 
+# 'gemma' is a user-facing alias for the local Ollama provider (free/local).
+_PROVIDER_ALIASES = {"gemma": "ollama"}
+
+
+def _normalize_provider(provider: str | None) -> str | None:
+    """Map a user-supplied provider name to a canonical provider id.
+
+    'gemma' -> 'ollama'. None passes through (means: use default fallback order).
+    """
+    if provider is None:
+        return None
+    p = provider.lower().strip()
+    return _PROVIDER_ALIASES.get(p, p)
+
+
+# Depth presets control cost/quality. 'quick' = cheap/fast, 'deep' = rich context.
+_DEPTH_PRESETS: dict[str, dict[str, int]] = {
+    "quick": {"bars": 40, "recent_bars": 10, "news": 0, "num_predict": 400},
+    "standard": {"bars": 120, "recent_bars": 20, "news": 5, "num_predict": 900},
+    "deep": {"bars": 120, "recent_bars": 40, "news": 8, "num_predict": 1200},
+}
+
+
+def _depth_preset(depth: str) -> dict[str, int]:
+    return _DEPTH_PRESETS.get((depth or "standard").lower(), _DEPTH_PRESETS["standard"])
+
+
 def _call_provider(provider: str, system: str, user: str, *,
                    json_format: bool, num_predict: int) -> tuple[str, str]:
     """Call one provider. Returns (content, model_id). Raises on failure."""
@@ -65,13 +92,25 @@ _SYSTEM = (
 
 
 def _build_prompt(symbol: str, snapshot: dict, ind: dict, bars: list[dict],
-                  news: list[dict]) -> str:
-    recent_bars = bars[-20:]
+                  news: list[dict], *, depth: str = "standard") -> str:
+    preset = _depth_preset(depth)
+    recent_bars = bars[-preset["recent_bars"]:]
     bar_lines = "\n".join(
         f"{b.get('t', '')[:10]} O{b['o']} H{b['h']} L{b['l']} C{b['c']} V{b['v']}"
         for b in recent_bars
     )
-    news_lines = "\n".join(f"- {n['headline']} ({n['source']})" for n in news)
+    if depth == "quick":
+        # Leaner prompt to keep the token budget (and latency) down.
+        return (
+            f"Analyze {symbol} quickly.\n\n"
+            f"Latest snapshot: {json.dumps(snapshot)}\n\n"
+            f"Indicator snapshot: {json.dumps(ind)}\n\n"
+            f"Recent daily bars (oldest->newest):\n{bar_lines}\n\n"
+            "Give a brief trading thesis, a short bear_case, sentiment_score in "
+            "[-1,1], conviction in [0,100], suggested_stop and suggested_target near "
+            "the current price, a suggested_action, and the market regime. STRICT JSON only."
+        )
+    news_lines = "\n".join(f"- {n['headline']} ({n.get('source','')})" for n in news)
     return (
         f"Analyze {symbol}.\n\n"
         f"Latest snapshot: {json.dumps(snapshot)}\n\n"
@@ -174,29 +213,57 @@ def _safe_news(symbols: list[str], limit: int) -> list[dict[str, Any]]:
         return []
 
 
-def analyze(symbol: str) -> dict[str, Any]:
+def analyze(symbol: str, *, provider: str | None = None,
+            depth: str = "standard") -> dict[str, Any]:
+    """Analyze a symbol and return a structured research dict.
+
+    provider:
+        When given, ONLY that provider is used (no cross-fallback). This is the
+        cost guard: passing 'gemma'/'ollama' guarantees the local free model is
+        used and Kimi credits are never spent. 'gemma' aliases to 'ollama'.
+        When None, the configured fallback order is used (kimi primary ->
+        gemma backup) — intended for explicit, user-initiated calls.
+    depth:
+        'quick'    — ~40 bars, ~400 num_predict, leaner prompt.
+        'standard' — current behavior (~120 bars, ~900 num_predict).
+        'deep'     — ~120 bars + more news, ~1200 num_predict; the caller may
+                     additionally persist a deep_research 'deep' doc.
+    """
     symbol = symbol.upper()
-    bars = alpaca_service.get_bars(symbol, "1Day", 120)
+    depth = (depth or "standard").lower()
+    preset = _depth_preset(depth)
+
+    forced = _normalize_provider(provider)
+    providers = [forced] if forced else _provider_order()
+
+    bars = alpaca_service.get_bars(symbol, "1Day", preset["bars"])
     ind = indicators.compute_all(bars)
     snapshot = alpaca_service.get_snapshot(symbol)
-    news = _safe_news([symbol], 5)
-    prompt = _build_prompt(symbol, snapshot, ind, bars, news)
+    news = _safe_news([symbol], preset["news"]) if preset["news"] else []
+    prompt = _build_prompt(symbol, snapshot, ind, bars, news, depth=depth)
 
     last_err: Exception | None = None
-    for provider in _provider_order():
+    for prov in providers:
         try:
             content, model = _call_provider(
-                provider, _SYSTEM, prompt, json_format=True, num_predict=900)
+                prov, _SYSTEM, prompt, json_format=True,
+                num_predict=preset["num_predict"])
             data = _parse_json_loose(content)
-            return _coerce(data, symbol, snapshot, provider, model)
+            result = _coerce(data, symbol, snapshot, prov, model)
+            result["depth"] = depth
+            return result
         except Exception as exc:
             last_err = exc
-            logger.warning("research analyze via %s failed (%s) — trying next provider.",
-                           provider, exc)
-    raise ResearchUnavailable(f"all research providers failed: {last_err}")
+            logger.warning("research analyze(%s, depth=%s) via %s failed (%s)%s.",
+                           symbol, depth, prov, exc,
+                           " — no fallback (provider forced)" if forced
+                           else " — trying next provider")
+    raise ResearchUnavailable(
+        f"research analyze failed for {symbol} (provider={provider}): {last_err}")
 
 
-def briefing(watchlist: list[str]) -> dict[str, Any]:
+def briefing(watchlist: list[str], *, provider: str | None = None) -> dict[str, Any]:
+    forced = _normalize_provider(provider)
     snapshots = alpaca_service.get_snapshots(watchlist)
     items = []
     for sym in watchlist:
@@ -220,15 +287,15 @@ def briefing(watchlist: list[str]) -> dict[str, Any]:
         "Write a concise 2-sentence morning market briefing for this watchlist "
         f"snapshot: {json.dumps(items)}. Be concrete. Respond as JSON {{\"summary\": string}}."
     )
-    for provider in _provider_order():
+    for prov in ([forced] if forced else _provider_order()):
         try:
             content, _ = _call_provider(
-                provider, "You are a market strategist. Respond with STRICT JSON only.",
+                prov, "You are a market strategist. Respond with STRICT JSON only.",
                 user, json_format=True, num_predict=400)
             summary = _parse_json_loose(content).get("summary", summary)
             break
         except Exception as exc:
-            logger.warning("briefing via %s failed (%s) — trying next.", provider, exc)
+            logger.warning("briefing via %s failed (%s).", prov, exc)
 
     return {
         "generated_at": _now(),
@@ -259,10 +326,17 @@ def _deep_disclaimer(kind: str) -> str:
     )
 
 
-def generate_deep(symbol: str, kind: str = "deep") -> dict[str, Any]:
-    """Build a longer markdown research report (deep dive or earnings synthesis)."""
+def generate_deep(symbol: str, kind: str = "deep", *,
+                  provider: str | None = None) -> dict[str, Any]:
+    """Build a longer markdown research report (deep dive or earnings synthesis).
+
+    provider: when given, ONLY that provider is used (no fallback). 'gemma'
+    aliases to 'ollama'. When None, the configured fallback order is used. The
+    background worker passes provider explicitly so it never spends Kimi credits.
+    """
     symbol = symbol.upper()
     kind = kind if kind in ("deep", "earnings") else "deep"
+    forced = _normalize_provider(provider)
     bars = alpaca_service.get_bars(symbol, "1Day", 120)
     ind = indicators.compute_all(bars)
     snapshot = alpaca_service.get_snapshot(symbol)
@@ -299,17 +373,17 @@ def generate_deep(symbol: str, kind: str = "deep") -> dict[str, Any]:
         "Return ONLY markdown (no JSON, no preamble)."
     )
 
-    provider = None
+    provider_used = None
     model = None
     body = ""
     last_err: Exception | None = None
-    for prov in _provider_order():
+    for prov in ([forced] if forced else _provider_order()):
         try:
             content, mdl = _call_provider(
                 prov, _DEEP_SYSTEM, user, json_format=False, num_predict=1400)
             content = (content or "").strip()
             if content:
-                provider, model, body = prov, mdl, content
+                provider_used, model, body = prov, mdl, content
                 break
         except Exception as exc:
             last_err = exc
@@ -332,7 +406,7 @@ def generate_deep(symbol: str, kind: str = "deep") -> dict[str, Any]:
             "indicators": ind,
             "news": news[:8],
         },
-        "provider": provider,
+        "provider": provider_used,
         "model": model,
         "generated_at": _now(),
     }

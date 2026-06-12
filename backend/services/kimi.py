@@ -11,7 +11,9 @@ import httpx
 
 from config import logger, settings
 
-_KIMI_TIMEOUT = 90.0
+# k2.6 is a heavier reasoning model; give the read a generous budget so the
+# full research prompt has time to complete (connect stays short to fail fast).
+_KIMI_TIMEOUT = httpx.Timeout(connect=10.0, read=200.0, write=30.0, pool=200.0)
 
 
 def configured() -> bool:

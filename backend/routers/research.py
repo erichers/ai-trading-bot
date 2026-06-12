@@ -13,8 +13,11 @@ router = APIRouter(prefix="/research", tags=["research"])
 
 @router.post("/analyze")
 def analyze(body: AnalyzeRequest):
+    # On-demand (user-initiated): provider None => kimi-primary for quality.
+    # Pass provider='gemma' to force the free local model instead.
     try:
-        result = research_svc.analyze(body.symbol)
+        result = research_svc.analyze(
+            body.symbol, provider=body.provider, depth=body.depth)
     except research_svc.ResearchUnavailable as exc:
         raise HTTPException(status_code=503, detail=f"Research unavailable: {exc}")
     try:

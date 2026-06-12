@@ -86,7 +86,23 @@ def health():
         "ollama_connected": research_svc.ollama_connected(),
         "kill_switch_engaged": kill_switch_engaged,
         "circuit_breaker_tripped": circuit_breaker_tripped,
+        "worker_enabled": _worker_enabled(),
+        "worker_provider": _worker_provider(),
     }
+
+
+def _worker_enabled() -> bool:
+    try:
+        return bool(research_worker.get_config().get("enabled", True))
+    except Exception:
+        return False
+
+
+def _worker_provider() -> str:
+    try:
+        return str(research_worker.get_config().get("provider", "gemma"))
+    except Exception:
+        return "gemma"
 
 
 # All REST routers under /api

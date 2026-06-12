@@ -21,8 +21,12 @@ from services import research as research_svc
 
 WORKER_KEY = "research_worker"
 
+# Continuous worker defaults to provider='gemma' (free/local) so 24/7 runs never
+# spend Kimi cloud credits. Kimi is reserved for on-demand, user-initiated calls.
 DEFAULT_CONFIG: dict[str, Any] = {
     "enabled": True,
+    "provider": "gemma",
+    "depth": "standard",
     "interval_sec": 900,
     "universe": ["SPY", "QQQ", "TSLA", "META", "NVDA", "AAPL", "AMZN", "GOOGL", "MSFT", "AMD"],
 }
@@ -58,6 +62,8 @@ def status() -> dict[str, Any]:
     cfg = get_config()
     return {
         "enabled": bool(cfg.get("enabled", True)),
+        "provider": str(cfg.get("provider", "gemma")),
+        "depth": str(cfg.get("depth", "standard")),
         "interval_sec": int(cfg.get("interval_sec", 900)),
         "universe": cfg.get("universe", []),
         "last_run": _state.get("last_run"),
@@ -74,9 +80,22 @@ def _safe_count_today() -> int:
         return 0
 
 
-def _analyze_one(symbol: str) -> None:
-    """Blocking: analyze a symbol and persist to research_analyses + deep_research."""
-    result = research_svc.analyze(symbol)
+def _analyze_one(symbol: str, *, provider: str, depth: str) -> None:
+    """Blocking: analyze a symbol and persist to research_analyses + deep_research.
+
+    The provider is passed explicitly so the continuous worker uses ONLY the
+    configured provider (default 'gemma'/local). There is NO fallback to Kimi —
+    if the forced provider fails, analyze() raises and the caller logs + skips.
+    """
+    result = research_svc.analyze(symbol, provider=provider, depth=depth)
+    # 'deep' depth additionally produces a full markdown deep-research doc, using
+    # the SAME provider (no surprise Kimi spend in the background worker).
+    if depth == "deep":
+        try:
+            doc = research_svc.generate_deep(symbol, "deep", provider=provider)
+            db.insert_deep_research(doc)
+        except Exception as exc:
+            logger.warning("worker: deep doc failed for %s (%s).", symbol, exc)
     try:
         db.insert_research(result)
     except Exception as exc:
@@ -101,11 +120,15 @@ def _analyze_one(symbol: str) -> None:
         logger.warning("worker: insert_deep_research failed for %s (%s).", symbol, exc)
 
 
-def _briefing_once() -> None:
-    """Blocking: generate a market briefing, persist to briefings + deep_research."""
+def _briefing_once(provider: str) -> None:
+    """Blocking: generate a market briefing, persist to briefings + deep_research.
+
+    provider is forced (default 'gemma') so the continuous worker never spends
+    Kimi credits on the per-cycle briefing.
+    """
     try:
         universe = get_config().get("universe") or db.get_watchlist()
-        result = research_svc.briefing(universe)
+        result = research_svc.briefing(universe, provider=provider)
         db.insert_briefing(result)
         items = result.get("items") or []
         body = (
@@ -120,16 +143,16 @@ def _briefing_once() -> None:
             "title": "Market briefing",
             "body": body,
             "data": result,
-            "provider": research_svc.settings.research_provider,
+            "provider": research_svc._normalize_provider(provider),
             "model": research_svc.settings.research_model,
         })
     except Exception as exc:
         logger.warning("worker: briefing cycle failed (%s).", exc)
 
 
-def _deep_once(symbol: str, kind: str = "deep") -> None:
+def _deep_once(symbol: str, kind: str, provider: str) -> None:
     try:
-        doc = research_svc.generate_deep(symbol, kind)
+        doc = research_svc.generate_deep(symbol, kind, provider=provider)
         db.insert_deep_research(doc)
     except Exception as exc:
         logger.warning("worker: deep generation failed for %s (%s).", symbol, exc)
@@ -138,31 +161,55 @@ def _deep_once(symbol: str, kind: str = "deep") -> None:
 async def _run_cycle() -> None:
     cfg = get_config()
     universe = list(cfg.get("universe") or [])
-    logger.info("research worker: starting cycle over %d symbols.", len(universe))
+    provider = str(cfg.get("provider", "gemma"))
+    depth = str(cfg.get("depth", "standard"))
+    logger.info(
+        "research worker: starting cycle over %d symbols (provider=%s, depth=%s).",
+        len(universe), provider, depth)
     for sym in universe:
         if not get_config().get("enabled", True):
             logger.info("research worker: disabled mid-cycle — stopping.")
             return
         _state["last_symbol"] = sym
         try:
-            await asyncio.to_thread(_analyze_one, sym)
-            logger.info("research worker: analyzed %s.", sym)
+            # provider passed explicitly => Gemma-only, NO fallback to Kimi.
+            await asyncio.to_thread(_analyze_one, sym, provider=provider, depth=depth)
+            logger.info("research worker: analyzed %s via %s.", sym, provider)
         except Exception as exc:
-            logger.warning("research worker: analyze %s failed (%s).", sym, exc)
+            # On failure: log + skip. Never fall back to a credit-spending provider.
+            logger.warning("research worker: analyze %s via %s failed (%s) — skipping.",
+                           sym, provider, exc)
         await asyncio.sleep(_SYMBOL_SLEEP)
 
-    # One market briefing per cycle.
-    await asyncio.to_thread(_briefing_once)
+    # One market briefing per cycle (same forced provider).
+    await asyncio.to_thread(_briefing_once, provider)
 
-    # Occasionally produce a deep dive on the first symbol (rotates by cycle).
+    # Occasionally produce a deep dive on a rotating symbol (same forced provider).
     if universe:
         idx = _state.get("cycles", 0) % len(universe)
         kind = "earnings" if (_state.get("cycles", 0) % 2 == 1) else "deep"
-        await asyncio.to_thread(_deep_once, universe[idx], kind)
+        await asyncio.to_thread(_deep_once, universe[idx], kind, provider)
 
     _state["cycles"] = _state.get("cycles", 0) + 1
     _state["last_run"] = datetime.now(timezone.utc).isoformat()
     logger.info("research worker: cycle complete (#%d).", _state["cycles"])
+
+
+async def run_once() -> dict[str, Any]:
+    """Run exactly ONE research cycle now with the configured provider/depth.
+
+    Used by the manual-refresh endpoint. Returns {ran, count}. Does not require
+    the background loop to be enabled.
+    """
+    before = _state.get("cycles", 0)
+    try:
+        await _run_cycle()
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.warning("research worker: run_once cycle error (%s).", exc)
+        return {"ran": False, "count": 0}
+    return {"ran": True, "count": _state.get("cycles", 0) - before}
 
 
 async def _loop() -> None:
@@ -173,18 +220,25 @@ async def _loop() -> None:
         while True:
             cfg = get_config()
             interval = max(30, int(cfg.get("interval_sec", 900)))
-            if cfg.get("enabled", True):
-                try:
-                    await _run_cycle()
-                except asyncio.CancelledError:
-                    raise
-                except Exception as exc:
-                    logger.warning("research worker: cycle error (%s).", exc)
-            else:
-                logger.info("research worker: disabled — idling.")
-            # Sleep the interval in small chunks so config changes take effect.
+            if not cfg.get("enabled", True):
+                # Disabled => the loop exits so status().running becomes false.
+                # PUT {enabled:true} restarts it. This guarantees the worker
+                # actually stops (no idle background task burning anything).
+                logger.info("research worker: disabled — loop exiting.")
+                return
+            try:
+                await _run_cycle()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.warning("research worker: cycle error (%s).", exc)
+            # Sleep the interval in small chunks so a config change (e.g. a
+            # disable) takes effect within ~10s rather than a full interval.
             slept = 0
             while slept < interval:
+                if not get_config().get("enabled", True):
+                    logger.info("research worker: disabled during sleep — loop exiting.")
+                    return
                 await asyncio.sleep(min(10, interval - slept))
                 slept += 10
     except asyncio.CancelledError:

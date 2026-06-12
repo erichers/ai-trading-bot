@@ -106,15 +106,28 @@ def worker_status():
 
 
 @router.put("/worker")
-def worker_update(body: ResearchWorkerUpdate):
+async def worker_update(body: ResearchWorkerUpdate):
+    # async so start()/stop() run on the event loop (asyncio.create_task needs a
+    # running loop in the current thread; a sync endpoint runs in a threadpool).
     cfg = research_worker.set_config(body.model_dump(exclude_unset=True))
-    # Start/stop the loop to reflect the new enabled flag.
+    # Start/stop the loop to match the new enabled flag.
     try:
         if cfg.get("enabled", True):
             research_worker.start()
-        # When disabled we leave the task alive but idling (it checks config each
-        # iteration); this keeps status().running truthful without races.
+        else:
+            # Stop the loop so it actually halts and status().running -> false.
+            research_worker.stop()
     except RuntimeError:
         # No running event loop (e.g. called outside async context) — ignore.
         pass
     return research_worker.status()
+
+
+@router.post("/worker/run-once")
+async def worker_run_once():
+    """Run exactly ONE research cycle now with the configured provider/depth.
+
+    For a manual refresh. Uses the worker's configured provider (default 'gemma')
+    so it does not spend Kimi credits unless the worker is explicitly set to kimi.
+    """
+    return await research_worker.run_once()

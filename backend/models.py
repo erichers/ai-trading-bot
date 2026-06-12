@@ -20,6 +20,8 @@ class HealthResponse(BaseModel):
     ollama_connected: bool = False
     kill_switch_engaged: bool = False
     circuit_breaker_tripped: bool = False
+    worker_enabled: bool = False
+    worker_provider: str = "gemma"
 
 
 class AccountResponse(BaseModel):
@@ -119,6 +121,10 @@ class Strategy(BaseModel):
 
 class AnalyzeRequest(BaseModel):
     symbol: str
+    # On-demand analyze: provider None -> kimi-primary (quality, user-initiated).
+    # Pass 'gemma'/'ollama' to force the free local model. 'kimi' forces cloud.
+    provider: Optional[Literal["gemma", "ollama", "kimi"]] = None
+    depth: Literal["quick", "standard", "deep"] = "standard"
 
 
 # ---- Risk Engine ------------------------------------------------------------
@@ -180,8 +186,14 @@ class DeepResearchRequest(BaseModel):
 
 
 class ResearchWorkerUpdate(BaseModel):
-    """Partial update of the background research worker config."""
+    """Partial update of the background research worker config.
+
+    The continuous worker defaults to provider='gemma' so 24/7 background runs
+    are free (local) and never burn Kimi cloud credits.
+    """
     enabled: Optional[bool] = None
+    provider: Optional[Literal["gemma", "ollama", "kimi"]] = None
+    depth: Optional[Literal["quick", "standard", "deep"]] = None
     interval_sec: Optional[int] = None
     universe: Optional[list[str]] = None
 
