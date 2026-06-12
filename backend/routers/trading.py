@@ -1,12 +1,12 @@
 """Account / trading / orders / trades / clock / calendar routes."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 
 import db
 from config import logger
 from models import AccountResponse, OrderRequest
-from services import alpaca_service
+from services import alpaca_service, risk
 
 router = APIRouter(tags=["trading"])
 
@@ -33,16 +33,65 @@ def orders(status: str = Query("open", pattern="^(open|closed|all)$")):
     return result
 
 
+def _build_risk_rules(decision: dict) -> list[dict]:
+    """Flatten vetoes+warnings into a single rules list with a 'kind' tag."""
+    rules = [{**v, "kind": "veto"} for v in decision.get("vetoes", [])]
+    rules += [{**w, "kind": "warning"} for w in decision.get("warnings", [])]
+    return rules
+
+
 @router.post("/orders")
 def create_order(order: OrderRequest):
     payload = order.model_dump()
+    source = payload.get("source", "manual")
+    bypass = bool(payload.pop("bypass_risk", False))
+
+    # ---- Risk Engine: evaluate BEFORE touching the broker -------------------
+    decision = None
+    try:
+        account = alpaca_service.get_account()
+        positions = alpaca_service.get_positions()
+        limits = db.get_risk_limits()
+        market_open = alpaca_service.market_open()
+        day_trade_count = int(account.get("daytrade_count") or 0)
+        decision = risk.evaluate_order(
+            payload, account, positions, limits, market_open, day_trade_count)
+    except HTTPException:
+        raise
+    except Exception as exc:  # risk-engine math should never 500 the route
+        logger.warning("risk evaluate_order failed (%s) — allowing order.", exc)
+        decision = None
+
+    if decision is not None and not decision["approved"] and not bypass:
+        # VETOED: do not submit, do not log a trade. Record the risk event.
+        try:
+            db.insert_risk_event({
+                "symbol": payload.get("symbol"),
+                "side": payload.get("side"),
+                "qty": payload.get("qty"),
+                "order_type": payload.get("type"),
+                "decision": "vetoed",
+                "rules": _build_risk_rules(decision),
+                "computed": decision.get("computed"),
+                "source": source,
+            })
+        except Exception as exc:
+            logger.warning("insert_risk_event (veto) failed (%s).", exc)
+        return {
+            "rejected": True,
+            "decision": "vetoed",
+            "vetoes": decision["vetoes"],
+            "computed": decision["computed"],
+            "risk": decision,
+        }
+
     result = alpaca_service.place_order(payload)
-    # Persist every attempt (real fills or mock acks) to the trades table.
+    # Persist the real order ack to the trades table.
     try:
         is_option = result.get("asset_class") == "option" or \
             alpaca_service._is_option_order(payload)
         db.insert_trade({
-            "alpaca_order_id": result.get("id") if result.get("id") != "mock-new-order" else None,
+            "alpaca_order_id": result.get("id"),
             "client_order_id": result.get("client_order_id"),
             "symbol": result.get("symbol"),
             "asset_class": "option" if is_option else "us_equity",
@@ -66,6 +115,33 @@ def create_order(order: OrderRequest):
         })
     except Exception as exc:
         logger.warning("insert_trade failed (%s).", exc)
+
+    # ---- Record the approved/warned (or bypassed) risk event ----------------
+    if decision is not None:
+        try:
+            rules = _build_risk_rules(decision)
+            event_decision = decision["decision"]
+            if bypass and not decision["approved"]:
+                # Emergency override: record as approved with a 'bypassed' warning.
+                event_decision = "approved"
+                rules = rules + [{
+                    "rule": "bypassed",
+                    "message": "Risk veto bypassed via bypass_risk=true.",
+                    "kind": "warning",
+                }]
+            db.insert_risk_event({
+                "symbol": result.get("symbol") or payload.get("symbol"),
+                "side": payload.get("side"),
+                "qty": payload.get("qty"),
+                "order_type": payload.get("type"),
+                "decision": event_decision,
+                "rules": rules,
+                "computed": decision.get("computed"),
+                "source": source,
+            })
+        except Exception as exc:
+            logger.warning("insert_risk_event (approved) failed (%s).", exc)
+        result["risk"] = decision
     return result
 
 

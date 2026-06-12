@@ -2,18 +2,29 @@ import type {
   Account,
   Asset,
   Bar,
+  Bot,
   Briefing,
   Clock,
   Health,
+  KillSwitchResult,
   IndicatorCatalogItem,
   Indicators,
   NewOrder,
   NewsItem,
   OptionContract,
+  OptionExpiration,
   OptionsFlow,
+  OptionsSelectResponse,
   Order,
   Position,
+  Proposal,
+  ProposalsResponse,
   Regime,
+  RiskCheckResult,
+  RiskEvent,
+  RiskLimits,
+  RiskSizeResult,
+  RiskStatus,
   ResearchHistoryItem,
   ResearchReport,
   SignalEvalResult,
@@ -97,11 +108,31 @@ export const api = {
   news: (symbols?: string[], limit = 30) =>
     request<NewsItem[]>(`/news${qs({ symbols: symbols?.join(','), limit })}`),
 
-  optionExpirations: (symbol: string) => request<string[]>(`/options/expirations/${symbol}`),
+  optionExpirations: (symbol: string) =>
+    request<OptionExpiration[]>(`/options/expirations/${symbol}`),
   optionChain: (symbol: string, expiration?: string, type: 'call' | 'put' | 'all' = 'all') =>
     request<OptionContract[]>(`/options/chain/${symbol}${qs({ expiration, type })}`),
   optionFlow: (symbol: string, period: 'weekly' | 'daily' = 'weekly') =>
     request<OptionsFlow>(`/options/flow/${symbol}${qs({ period })}`),
+
+  // Live ATM/OTM/ITM contract picker around the underlying price.
+  optionsSelect: (
+    symbol: string,
+    opts: {
+      right: 'call' | 'put';
+      expiry?: string;
+      moneyness?: 'ATM' | 'OTM' | 'ITM';
+      count?: number;
+    },
+  ) =>
+    request<OptionsSelectResponse>(
+      `/options/select/${symbol}${qs({
+        right: opts.right,
+        expiry: opts.expiry ?? 'nearest_weekly',
+        moneyness: opts.moneyness ?? 'ATM',
+        count: opts.count ?? 9,
+      })}`,
+    ),
 
   watchlist: () => request<string[]>('/watchlist'),
   addWatch: (symbol: string) =>
@@ -140,6 +171,46 @@ export const api = {
 
   signalsHistory: (symbol?: string, limit = 50) =>
     request<SignalHistoryItem[]>(`/signals/history${qs({ symbol, limit })}`),
+
+  // ---- Risk Engine -------------------------------------------------------
+  riskLimits: () => request<RiskLimits>('/risk/limits'),
+  updateRiskLimits: (limits: Partial<RiskLimits>) =>
+    request<RiskLimits>('/risk/limits', { method: 'PUT', body: JSON.stringify(limits) }),
+  riskStatus: () => request<RiskStatus>('/risk/status'),
+  riskCheck: (order: NewOrder) =>
+    request<RiskCheckResult>('/risk/check', { method: 'POST', body: JSON.stringify(order) }),
+  riskSize: (entry: number, stop: number, risk_per_trade_pct?: number) =>
+    request<RiskSizeResult>('/risk/size', {
+      method: 'POST',
+      body: JSON.stringify({ entry, stop, risk_per_trade_pct }),
+    }),
+  riskKillSwitch: (engaged: boolean, flatten?: boolean) =>
+    request<KillSwitchResult>('/risk/kill-switch', {
+      method: 'POST',
+      body: JSON.stringify({ engaged, flatten }),
+    }),
+  riskEvents: (limit = 50) => request<RiskEvent[]>(`/risk/events${qs({ limit })}`),
+
+  // ---- Weekly-options Bots ----------------------------------------------
+  bots: () => request<Bot[]>('/bots'),
+  createBot: (b: Partial<Bot>) =>
+    request<Bot>('/bots', { method: 'POST', body: JSON.stringify(b) }),
+  updateBot: (id: string, b: Partial<Bot>) =>
+    request<Bot>(`/bots/${id}`, { method: 'PUT', body: JSON.stringify(b) }),
+  deleteBot: (id: string) => request<void>(`/bots/${id}`, { method: 'DELETE' }),
+  evaluateBot: (id: string) =>
+    request<ProposalsResponse>(`/bots/${id}/evaluate`, { method: 'POST' }).then(normalizeProposals),
+  runBot: (id: string, place: boolean) =>
+    request<ProposalsResponse>(`/bots/${id}/run`, {
+      method: 'POST',
+      body: JSON.stringify({ place }),
+    }).then(normalizeProposals),
 };
+
+// Backend may return { proposals: [...] } or a bare Proposal[] — normalize both.
+function normalizeProposals(res: ProposalsResponse): Proposal[] {
+  if (Array.isArray(res)) return res;
+  return res?.proposals ?? [];
+}
 
 export type Api = typeof api;

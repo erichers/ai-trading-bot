@@ -1,10 +1,11 @@
-"""REAL options data via alpaca-py with graceful mock fallback.
+"""REAL options data via alpaca-py. NO MOCK FALLBACK.
 
-- Expirations: TradingClient.get_option_contracts (paginated) → distinct dates.
-- Chain: OptionHistoricalDataClient.get_option_chain → mapped contract list.
+- Expirations: TradingClient.get_option_contracts (paginated) -> distinct dates.
+- Chain: OptionHistoricalDataClient.get_option_chain -> mapped contract list.
 - Flow: aggregated from the real chain for the relevant expiration.
 
-Every call falls back to services.mock.* on failure / empty so the UI keeps working.
+On any failure / empty result these raise fastapi.HTTPException: 424 when the
+SDK/creds are missing, 503 when the upstream chain is unavailable or empty.
 """
 from __future__ import annotations
 
@@ -12,8 +13,9 @@ import re
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
+from fastapi import HTTPException
+
 from config import logger, settings
-from services import mock
 
 # ---- Lazy SDK import --------------------------------------------------------
 _sdk_ok = False
@@ -26,7 +28,7 @@ try:
 
     _sdk_ok = True
 except Exception as exc:  # pragma: no cover
-    logger.warning("alpaca options SDK not importable (%s) — options mock-only.", exc)
+    logger.warning("alpaca options SDK not importable (%s) — options will raise 424.", exc)
     _sdk_ok = False
 
 _trading_client = None
@@ -34,6 +36,12 @@ _option_client = None
 
 # OCC option symbol: ROOT(1-6) + YYMMDD(6) + C|P + strike*1000 padded to 8.
 OCC_RE = re.compile(r"^([A-Z]{1,6})(\d{6})([CP])(\d{8})$")
+
+
+def _no_client() -> HTTPException:
+    if not _sdk_ok:
+        return HTTPException(status_code=424, detail="Alpaca options SDK not importable.")
+    return HTTPException(status_code=424, detail="Alpaca credentials not configured.")
 
 
 def _trading():
@@ -98,7 +106,7 @@ def _is_monthly(d: date) -> bool:
 def get_option_expirations(symbol: str) -> list[str]:
     client = _trading()
     if client is None:
-        return mock.mock_expirations(symbol)
+        raise _no_client()
     try:
         today = datetime.now(timezone.utc).date()
         seen: set[str] = set()
@@ -122,10 +130,16 @@ def get_option_expirations(symbol: str) -> list[str]:
             if not page_token:
                 break
         out = sorted(seen)
-        return out or mock.mock_expirations(symbol)
+        if not out:
+            raise HTTPException(status_code=503,
+                                detail=f"No option expirations available for {symbol}.")
+        return out
+    except HTTPException:
+        raise
     except Exception as exc:
-        logger.warning("get_option_expirations failed for %s (%s) — mock.", symbol, exc)
-        return mock.mock_expirations(symbol)
+        logger.warning("get_option_expirations failed for %s (%s).", symbol, exc)
+        raise HTTPException(status_code=503,
+                            detail=f"Option expirations unavailable for {symbol}: {exc}")
 
 
 def expirations_with_type(symbol: str) -> list[dict[str, Any]]:
@@ -184,7 +198,7 @@ def _snapshot_to_contract(occ: str, snap: Any) -> dict[str, Any] | None:
 def get_option_chain(symbol: str, expiration: str | None, opt_type: str) -> list[dict[str, Any]]:
     client = _option_data()
     if client is None:
-        return mock.mock_option_chain(symbol, expiration, opt_type)
+        raise _no_client()
     try:
         exp = expiration
         if not exp:
@@ -207,12 +221,237 @@ def get_option_chain(symbol: str, expiration: str | None, opt_type: str) -> list
             out = [c for c in out if c["type"] == opt_type]
         out.sort(key=lambda c: (c["expiration"], c["type"], c["strike"]))
         if not out:
-            logger.warning("get_option_chain empty for %s %s — mock.", symbol, exp)
-            return mock.mock_option_chain(symbol, expiration, opt_type)
+            raise HTTPException(
+                status_code=503,
+                detail=f"Empty option chain for {symbol} {exp or '(nearest)'}.")
         return out
+    except HTTPException:
+        raise
     except Exception as exc:
-        logger.warning("get_option_chain failed for %s (%s) — mock.", symbol, exc)
-        return mock.mock_option_chain(symbol, expiration, opt_type)
+        logger.warning("get_option_chain failed for %s (%s).", symbol, exc)
+        raise HTTPException(status_code=503,
+                            detail=f"Option chain unavailable for {symbol}: {exc}")
+
+
+# ---- Underlying price -------------------------------------------------------
+def underlying_price(symbol: str) -> float:
+    """Real underlying price from the equity snapshot (raises 503 if unavailable)."""
+    from services import alpaca_service  # local import avoids cycle
+    snap = alpaca_service.get_snapshot(symbol)
+    price = float(snap.get("price") or 0.0)
+    if price <= 0:
+        raise HTTPException(status_code=503,
+                            detail=f"No underlying price for {symbol}.")
+    return price
+
+
+# ---- Nearest weekly ---------------------------------------------------------
+def nearest_weekly(symbol: str) -> str | None:
+    exps = expirations_with_type(symbol)
+    weeklies = [e["date"] for e in exps if e.get("type") == "weekly"]
+    if weeklies:
+        return sorted(weeklies)[0]
+    if exps:
+        return sorted(e["date"] for e in exps)[0]
+    return None
+
+
+def _resolve_expiry(symbol: str, expiry: str | None) -> str:
+    """Resolve an expiry spec ('nearest_weekly'|'YYYY-MM-DD'|None) to a date string."""
+    spec = (expiry or "nearest_weekly").strip()
+    if spec.lower() == "nearest_weekly" or not spec:
+        exp = nearest_weekly(symbol)
+        if not exp:
+            raise HTTPException(status_code=503,
+                                detail=f"No weekly expiration for {symbol}.")
+        return exp
+    # explicit date
+    try:
+        datetime.fromisoformat(spec)
+        return spec
+    except ValueError:
+        raise HTTPException(status_code=422, detail=f"Bad expiry '{spec}'.")
+
+
+# ---- Moneyness helpers ------------------------------------------------------
+def _moneyness(strike: float, under: float, right: str) -> str:
+    """ATM/ITM/OTM relative to the underlying for a given option right."""
+    if abs(strike - under) < 1e-9:
+        return "ATM"
+    if right == "call":
+        return "ITM" if strike < under else "OTM"
+    # put
+    return "ITM" if strike > under else "OTM"
+
+
+def _distance_pct(strike: float, under: float) -> float:
+    return round((strike - under) / under * 100.0, 4) if under else 0.0
+
+
+def select_contracts(symbol: str, right: str, expiry: str | None,
+                     moneyness: str | None = None, count: int = 9) -> dict[str, Any]:
+    """Return REAL contracts centered on ATM (or filtered by moneyness).
+
+    Computes ATM = strike nearest the live underlying, and annotates each
+    contract with moneyness + distance_pct. Returns `count` contracts centered
+    on ATM so the UI can present ATM +/- a few strikes.
+    """
+    symbol = symbol.upper()
+    right = (right or "call").lower()
+    if right not in ("call", "put"):
+        raise HTTPException(status_code=422, detail="right must be call or put")
+    count = max(1, min(int(count or 9), 50))
+
+    exp = _resolve_expiry(symbol, expiry)
+    under = underlying_price(symbol)
+    chain = get_option_chain(symbol, exp, right)  # already filtered to one right
+    if not chain:
+        raise HTTPException(status_code=503,
+                            detail=f"No {right} contracts for {symbol} {exp}.")
+
+    chain.sort(key=lambda c: c["strike"])
+    strikes = [c["strike"] for c in chain]
+    # ATM = strike nearest underlying.
+    atm_idx = min(range(len(strikes)), key=lambda i: abs(strikes[i] - under))
+
+    annotated: list[dict[str, Any]] = []
+    for c in chain:
+        strike = float(c["strike"])
+        m = _moneyness(strike, under, right)
+        bid = float(c.get("bid") or 0.0)
+        ask = float(c.get("ask") or 0.0)
+        mid = round((bid + ask) / 2, 4) if (bid or ask) else float(c.get("last") or 0.0)
+        annotated.append({
+            "occ_symbol": c["symbol"],
+            "strike": strike,
+            "right": right,
+            "expiration": c["expiration"],
+            "bid": bid,
+            "ask": ask,
+            "mid": mid,
+            "last": float(c.get("last") or 0.0),
+            "implied_volatility": float(c.get("implied_volatility") or 0.0),
+            "delta": float(c.get("delta") or 0.0),
+            "gamma": float(c.get("gamma") or 0.0),
+            "theta": float(c.get("theta") or 0.0),
+            "vega": float(c.get("vega") or 0.0),
+            "open_interest": int(c.get("open_interest") or 0),
+            "volume": int(c.get("volume") or 0),
+            "moneyness": m,
+            "distance_pct": _distance_pct(strike, under),
+        })
+
+    if moneyness:
+        mny = moneyness.upper()
+        if mny == "ATM":
+            # ATM +/- a few strikes centered on the nearest-to-spot strike.
+            lo = max(0, atm_idx - count // 2)
+            hi = min(len(annotated), lo + count)
+            lo = max(0, hi - count)
+            selected = annotated[lo:hi]
+        else:
+            # The OTM/ITM contracts NEAREST to ATM (most relevant to pick).
+            filtered = [c for c in annotated if c["moneyness"] == mny]
+            filtered.sort(key=lambda c: abs(c["strike"] - under))
+            selected = filtered[:count]
+            selected.sort(key=lambda c: c["strike"])
+    else:
+        lo = max(0, atm_idx - count // 2)
+        hi = lo + count
+        if hi > len(annotated):
+            hi = len(annotated)
+            lo = max(0, hi - count)
+        selected = annotated[lo:hi]
+
+    return {
+        "symbol": symbol,
+        "underlying_price": round(under, 4),
+        "expiration": exp,
+        "right": right,
+        "contracts": selected,
+    }
+
+
+def select_one(symbol: str, right: str, expiry: str | None,
+               moneyness: str = "ATM", otm_strikes: int = 1) -> dict[str, Any]:
+    """Pick a single real contract per moneyness/otm_strikes from the chain.
+
+    Used by the bot/strategy engine. ATM = nearest strike; OTM/ITM step
+    `otm_strikes` strikes away in the appropriate direction for the right.
+    """
+    symbol = symbol.upper()
+    right = (right or "call").lower()
+    exp = _resolve_expiry(symbol, expiry)
+    under = underlying_price(symbol)
+    chain = get_option_chain(symbol, exp, right)
+    chain.sort(key=lambda c: c["strike"])
+    strikes = [c["strike"] for c in chain]
+    atm_idx = min(range(len(strikes)), key=lambda i: abs(strikes[i] - under))
+
+    mny = (moneyness or "ATM").upper()
+    steps = max(0, int(otm_strikes or 0))
+    idx = atm_idx
+    if mny == "OTM":
+        # OTM call -> higher strike; OTM put -> lower strike.
+        idx = atm_idx + steps if right == "call" else atm_idx - steps
+    elif mny == "ITM":
+        idx = atm_idx - steps if right == "call" else atm_idx + steps
+    idx = max(0, min(idx, len(chain) - 1))
+
+    c = chain[idx]
+    strike = float(c["strike"])
+    bid = float(c.get("bid") or 0.0)
+    ask = float(c.get("ask") or 0.0)
+    mid = round((bid + ask) / 2, 4) if (bid or ask) else float(c.get("last") or 0.0)
+    return {
+        "occ_symbol": c["symbol"],
+        "symbol": c["symbol"],  # alias for downstream order builders
+        "strike": strike,
+        "right": right,
+        "type": right,
+        "expiration": c["expiration"],
+        "bid": bid,
+        "ask": ask,
+        "mid": mid,
+        "last": float(c.get("last") or 0.0),
+        "implied_volatility": float(c.get("implied_volatility") or 0.0),
+        "delta": float(c.get("delta") or 0.0),
+        "gamma": float(c.get("gamma") or 0.0),
+        "theta": float(c.get("theta") or 0.0),
+        "vega": float(c.get("vega") or 0.0),
+        "open_interest": int(c.get("open_interest") or 0),
+        "volume": int(c.get("volume") or 0),
+        "moneyness": _moneyness(strike, under, right),
+        "distance_pct": _distance_pct(strike, under),
+        "underlying_price": round(under, 4),
+    }
+
+
+def contract_by_symbol(occ_symbol: str) -> dict[str, Any]:
+    """Fetch a single explicit OCC contract from the real chain (503 if missing)."""
+    parsed = parse_occ(occ_symbol)
+    if not parsed:
+        raise HTTPException(status_code=422, detail=f"Bad OCC symbol '{occ_symbol}'.")
+    chain = get_option_chain(parsed["root"], parsed["expiration"], parsed["type"])
+    for c in chain:
+        if c["symbol"].upper() == occ_symbol.strip().upper():
+            bid = float(c.get("bid") or 0.0)
+            ask = float(c.get("ask") or 0.0)
+            mid = round((bid + ask) / 2, 4) if (bid or ask) else float(c.get("last") or 0.0)
+            return {
+                "occ_symbol": c["symbol"], "symbol": c["symbol"],
+                "strike": float(c["strike"]), "right": c["type"], "type": c["type"],
+                "expiration": c["expiration"], "bid": bid, "ask": ask, "mid": mid,
+                "last": float(c.get("last") or 0.0),
+                "implied_volatility": float(c.get("implied_volatility") or 0.0),
+                "delta": float(c.get("delta") or 0.0),
+                "gamma": float(c.get("gamma") or 0.0),
+                "theta": float(c.get("theta") or 0.0),
+                "vega": float(c.get("vega") or 0.0),
+                "open_interest": int(c.get("open_interest") or 0),
+                "volume": int(c.get("volume") or 0),
+            }
+    raise HTTPException(status_code=503, detail=f"Contract {occ_symbol} not found in live chain.")
 
 
 # ---- Flow -------------------------------------------------------------------
@@ -233,13 +472,10 @@ def _nearest_expiration(symbol: str, period: str) -> str | None:
 def get_option_flow(symbol: str, period: str) -> dict[str, Any]:
     client = _option_data()
     if client is None:
-        return mock.mock_option_flow(symbol, period)
+        raise _no_client()
     try:
         exp = _nearest_expiration(symbol, period)
         chain = get_option_chain(symbol, exp, "all")
-        # If the chain came back mock-shaped (no greeks at all), still aggregate it.
-        if not chain:
-            return mock.mock_option_flow(symbol, period)
 
         calls = [c for c in chain if c["type"] == "call"]
         puts = [c for c in chain if c["type"] == "put"]
@@ -281,6 +517,9 @@ def get_option_flow(symbol: str, period: str) -> dict[str, Any]:
             "total_put_volume": total_put_vol,
             "unusual": sorted(unusual, key=lambda x: -x["vol_oi_ratio"])[:10],
         }
+    except HTTPException:
+        raise
     except Exception as exc:
-        logger.warning("get_option_flow failed for %s (%s) — mock.", symbol, exc)
-        return mock.mock_option_flow(symbol, period)
+        logger.warning("get_option_flow failed for %s (%s).", symbol, exc)
+        raise HTTPException(status_code=503,
+                            detail=f"Option flow unavailable for {symbol}: {exc}")

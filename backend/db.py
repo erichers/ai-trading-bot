@@ -20,7 +20,9 @@ from sqlalchemy import (
     create_engine,
     func,
     select,
+    text,
 )
+from sqlalchemy.dialects.mysql import MEDIUMTEXT
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 from config import logger, settings
@@ -56,6 +58,14 @@ class Watchlist(Base):
     added_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
+# Shared default action for equity strategies (option bots override per-config).
+DEFAULT_EQUITY_ACTION: dict[str, Any] = {"asset": "equity", "side": "buy"}
+DEFAULT_OPTION_ACTION: dict[str, Any] = {
+    "asset": "option", "right": "auto", "moneyness": "ATM",
+    "otm_strikes": 1, "expiry": "nearest_weekly", "contract_symbol": None,
+}
+
+
 class Strategy(Base):
     __tablename__ = "strategies"
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -66,6 +76,7 @@ class Strategy(Base):
     ai_gate: Mapped[Any] = mapped_column(JSON, default=dict)
     exits: Mapped[Any] = mapped_column(JSON, default=dict)
     sizing: Mapped[Any] = mapped_column(JSON, default=dict)
+    action: Mapped[Any] = mapped_column(JSON, default=dict)
     mode: Mapped[str] = mapped_column(String(16), default="signal")
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
@@ -81,6 +92,7 @@ class Strategy(Base):
             "ai_gate": self.ai_gate or {},
             "exits": self.exits or {},
             "sizing": self.sizing or {},
+            "action": self.action or dict(DEFAULT_EQUITY_ACTION),
             "mode": self.mode,
             "enabled": self.enabled,
             "created_at": self.created_at.isoformat() if self.created_at else None,
@@ -211,6 +223,34 @@ class Signal(Base):
         }
 
 
+class RiskEvent(Base):
+    __tablename__ = "risk_events"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    symbol: Mapped[str] = mapped_column(String(32), index=True)
+    side: Mapped[Optional[str]] = mapped_column(String(8), nullable=True)
+    qty: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    order_type: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    decision: Mapped[str] = mapped_column(String(16), index=True)
+    rules: Mapped[Any] = mapped_column(JSON, nullable=True)
+    computed: Mapped[Any] = mapped_column(JSON, nullable=True)
+    source: Mapped[str] = mapped_column(String(16), default="manual")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "symbol": self.symbol,
+            "side": self.side,
+            "qty": self.qty,
+            "order_type": self.order_type,
+            "decision": self.decision,
+            "rules": self.rules or [],
+            "computed": self.computed or {},
+            "source": self.source,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
 class Briefing(Base):
     __tablename__ = "briefings"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -229,9 +269,109 @@ class Briefing(Base):
         }
 
 
+class DeepResearch(Base):
+    __tablename__ = "deep_research"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    symbol: Mapped[str] = mapped_column(String(32), index=True)
+    kind: Mapped[str] = mapped_column(String(24), index=True, default="analysis")
+    title: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    body: Mapped[Optional[str]] = mapped_column(MEDIUMTEXT, nullable=True)
+    data: Mapped[Any] = mapped_column(JSON, nullable=True)
+    provider: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    model: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+    def to_dict(self, *, summary_len: int = 280) -> dict[str, Any]:
+        body = self.body or ""
+        summary = body[:summary_len].rstrip() + ("…" if len(body) > summary_len else "")
+        return {
+            "id": self.id,
+            "symbol": self.symbol,
+            "kind": self.kind,
+            "title": self.title,
+            "body": body,
+            "summary": summary,
+            "data": self.data or {},
+            "provider": self.provider,
+            "model": self.model,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class Bot(Base):
+    __tablename__ = "bots"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    name: Mapped[str] = mapped_column(String(255))
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    symbols: Mapped[Any] = mapped_column(JSON, default=list)
+    kind: Mapped[str] = mapped_column(String(32), default="options_weekly")
+    config: Mapped[Any] = mapped_column(JSON, default=dict)
+    rules: Mapped[Any] = mapped_column(JSON, default=list)
+    ai_gate: Mapped[Any] = mapped_column(JSON, default=dict)
+    risk: Mapped[Any] = mapped_column(JSON, default=dict)
+    action: Mapped[Any] = mapped_column(JSON, default=dict)
+    mode: Mapped[str] = mapped_column(String(16), default="signal")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "enabled": self.enabled,
+            "symbols": self.symbols or [],
+            "kind": self.kind,
+            "config": self.config or {},
+            "rules": self.rules or [],
+            "ai_gate": self.ai_gate or {},
+            "risk": self.risk or {},
+            "action": self.action or dict(DEFAULT_OPTION_ACTION),
+            "mode": self.mode,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class ChatMessage(Base):
+    __tablename__ = "chat_messages"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    role: Mapped[str] = mapped_column(String(16), default="user")
+    content: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    meta: Mapped[Any] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "role": self.role,
+            "content": self.content,
+            "meta": self.meta or {},
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
 # ---- Init -------------------------------------------------------------------
+def _ensure_action_columns() -> None:
+    """Add the JSON ``action`` column to bots/strategies if missing (safe on
+    existing rows — defaults applied at read time via to_dict)."""
+    for table in ("bots", "strategies"):
+        try:
+            with engine.begin() as conn:
+                exists = conn.execute(text(
+                    "SELECT COUNT(*) FROM information_schema.columns "
+                    "WHERE table_schema = DATABASE() AND table_name = :t "
+                    "AND column_name = 'action'"
+                ), {"t": table}).scalar()
+                if not exists:
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN action JSON NULL"))
+                    logger.info("Added 'action' column to %s.", table)
+        except Exception as exc:
+            logger.warning("ensure action column on %s failed (%s).", table, exc)
+
+
 def init_db() -> None:
     Base.metadata.create_all(engine)
+    _ensure_action_columns()
     with SessionLocal() as s:
         count = s.scalar(select(func.count()).select_from(Watchlist))
         if not count:
@@ -239,6 +379,7 @@ def init_db() -> None:
                 s.add(Watchlist(symbol=sym, added_at=_now()))
             s.commit()
             logger.info("Seeded default watchlist (%d symbols).", len(DEFAULT_WATCHLIST))
+    seed_default_bot()
 
 
 def _parse_dt(value: Any) -> Optional[datetime]:
@@ -305,6 +446,7 @@ def create_strategy(strategy: dict[str, Any]) -> dict[str, Any]:
             ai_gate=strategy.get("ai_gate", {}),
             exits=strategy.get("exits", {}),
             sizing=strategy.get("sizing", {}),
+            action=strategy.get("action") or dict(DEFAULT_EQUITY_ACTION),
             mode=strategy.get("mode", "signal"),
             enabled=strategy.get("enabled", True),
         )
@@ -319,7 +461,7 @@ def update_strategy(strategy_id: str, strategy: dict[str, Any]) -> dict[str, Any
         if obj is None:
             return None
         for field in ("name", "symbols", "timeframe", "rules", "ai_gate",
-                      "exits", "sizing", "mode", "enabled"):
+                      "exits", "sizing", "action", "mode", "enabled"):
             if field in strategy and strategy[field] is not None:
                 setattr(obj, field, strategy[field])
         s.commit()
@@ -511,3 +653,212 @@ def insert_briefing(data: dict[str, Any]) -> dict[str, Any]:
         s.add(obj)
         s.commit()
         return obj.to_dict()
+
+
+# ---- Risk limits (persisted under settings key "risk_limits") ---------------
+RISK_LIMITS_KEY = "risk_limits"
+
+
+def get_risk_limits() -> dict[str, Any]:
+    """Return persisted risk limits merged over engine defaults."""
+    from services.risk import DEFAULT_LIMITS  # local import avoids cycle
+
+    stored = get_setting(RISK_LIMITS_KEY) or {}
+    if not isinstance(stored, dict):
+        stored = {}
+    return {**DEFAULT_LIMITS, **stored}
+
+
+def set_risk_limits(partial: dict[str, Any]) -> dict[str, Any]:
+    """Merge a partial update into the persisted limits and return the result."""
+    current = get_risk_limits()
+    merged = {**current, **{k: v for k, v in (partial or {}).items() if v is not None}}
+    set_setting(RISK_LIMITS_KEY, merged)
+    return merged
+
+
+# ---- Risk events ------------------------------------------------------------
+def insert_risk_event(data: dict[str, Any]) -> dict[str, Any]:
+    with SessionLocal() as s:
+        obj = RiskEvent(
+            symbol=(data.get("symbol") or "").upper(),
+            side=data.get("side"),
+            qty=data.get("qty"),
+            order_type=data.get("order_type"),
+            decision=data.get("decision", "approved"),
+            rules=data.get("rules") or [],
+            computed=data.get("computed") or {},
+            source=data.get("source", "manual"),
+        )
+        s.add(obj)
+        s.commit()
+        return obj.to_dict()
+
+
+def list_risk_events(limit: int = 50) -> list[dict[str, Any]]:
+    with SessionLocal() as s:
+        stmt = select(RiskEvent).order_by(RiskEvent.id.desc()).limit(limit)
+        return [r.to_dict() for r in s.scalars(stmt).all()]
+
+
+# ---- Deep research ----------------------------------------------------------
+def insert_deep_research(data: dict[str, Any]) -> dict[str, Any]:
+    with SessionLocal() as s:
+        obj = DeepResearch(
+            symbol=(data.get("symbol") or "").upper(),
+            kind=data.get("kind", "analysis"),
+            title=data.get("title"),
+            body=data.get("body"),
+            data=data.get("data"),
+            provider=data.get("provider"),
+            model=data.get("model"),
+            created_at=_parse_dt(data.get("created_at")) or _now(),
+        )
+        s.add(obj)
+        s.commit()
+        return obj.to_dict()
+
+
+def list_deep_research(symbol: str | None = None, kind: str | None = None,
+                       limit: int = 50, *, summary_len: int = 280) -> list[dict[str, Any]]:
+    with SessionLocal() as s:
+        stmt = select(DeepResearch).order_by(DeepResearch.id.desc())
+        if symbol:
+            stmt = stmt.where(DeepResearch.symbol == symbol.upper())
+        if kind:
+            stmt = stmt.where(DeepResearch.kind == kind)
+        stmt = stmt.limit(limit)
+        return [r.to_dict(summary_len=summary_len) for r in s.scalars(stmt).all()]
+
+
+def get_deep_research(deep_id: int) -> dict[str, Any] | None:
+    with SessionLocal() as s:
+        obj = s.get(DeepResearch, deep_id)
+        return obj.to_dict() if obj else None
+
+
+def count_deep_research_today() -> int:
+    with SessionLocal() as s:
+        start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
+        return int(s.scalar(
+            select(func.count()).select_from(DeepResearch).where(DeepResearch.created_at >= start)
+        ) or 0)
+
+
+# ---- Bots -------------------------------------------------------------------
+DEFAULT_BOT_SYMBOLS = ["QQQ", "SPY", "TSLA", "META", "NVDA"]
+DEFAULT_BOT_CONFIG = {
+    "direction": "research",
+    "side": "auto",
+    "expiry": "nearest_weekly",
+    "strike": "ATM",
+    "target_delta": 0.4,
+    "contracts": 1,
+    "max_premium": 1500,
+}
+
+
+def list_bots() -> list[dict[str, Any]]:
+    with SessionLocal() as s:
+        rows = s.scalars(select(Bot).order_by(Bot.created_at.asc())).all()
+        return [r.to_dict() for r in rows]
+
+
+def get_bot(bot_id: str) -> dict[str, Any] | None:
+    with SessionLocal() as s:
+        obj = s.get(Bot, bot_id)
+        return obj.to_dict() if obj else None
+
+
+def create_bot(bot: dict[str, Any]) -> dict[str, Any]:
+    bot = dict(bot)
+    bid = bot.get("id") or _uid()
+    with SessionLocal() as s:
+        obj = Bot(
+            id=bid,
+            name=bot.get("name", "Bot"),
+            enabled=bot.get("enabled", True),
+            symbols=bot.get("symbols") or list(DEFAULT_BOT_SYMBOLS),
+            kind=bot.get("kind", "options_weekly"),
+            config={**DEFAULT_BOT_CONFIG, **(bot.get("config") or {})},
+            rules=bot.get("rules") or [],
+            ai_gate=bot.get("ai_gate") or {"enabled": True, "min_conviction": 60},
+            risk=bot.get("risk") or {"risk_per_trade_pct": 1},
+            action=bot.get("action") or dict(DEFAULT_OPTION_ACTION),
+            mode=bot.get("mode", "signal"),
+        )
+        s.add(obj)
+        s.commit()
+        return obj.to_dict()
+
+
+def update_bot(bot_id: str, bot: dict[str, Any]) -> dict[str, Any] | None:
+    with SessionLocal() as s:
+        obj = s.get(Bot, bot_id)
+        if obj is None:
+            return None
+        for field in ("name", "enabled", "symbols", "kind", "config",
+                      "rules", "ai_gate", "risk", "action", "mode"):
+            if field in bot and bot[field] is not None:
+                setattr(obj, field, bot[field])
+        s.commit()
+        return obj.to_dict()
+
+
+def delete_bot(bot_id: str) -> bool:
+    with SessionLocal() as s:
+        obj = s.get(Bot, bot_id)
+        if obj is None:
+            return False
+        s.delete(obj)
+        s.commit()
+        return True
+
+
+def seed_default_bot() -> None:
+    with SessionLocal() as s:
+        count = s.scalar(select(func.count()).select_from(Bot))
+        if count:
+            return
+    create_bot({
+        "name": "Weekly Options — Megacap",
+        "symbols": list(DEFAULT_BOT_SYMBOLS),
+        "kind": "options_weekly",
+        "config": dict(DEFAULT_BOT_CONFIG),
+        "rules": [],
+        "ai_gate": {"enabled": True, "min_conviction": 60},
+        "risk": {"risk_per_trade_pct": 1},
+        "mode": "signal",
+    })
+    logger.info("Seeded default bot 'Weekly Options — Megacap'.")
+
+
+# ---- Chat history -----------------------------------------------------------
+def insert_chat_message(role: str, content: str, meta: dict[str, Any] | None = None) -> dict[str, Any]:
+    with SessionLocal() as s:
+        obj = ChatMessage(role=role, content=content, meta=meta or {})
+        s.add(obj)
+        s.commit()
+        return obj.to_dict()
+
+
+def list_chat_messages(limit: int = 50) -> list[dict[str, Any]]:
+    with SessionLocal() as s:
+        stmt = select(ChatMessage).order_by(ChatMessage.id.desc()).limit(limit)
+        rows = list(s.scalars(stmt).all())
+        return [r.to_dict() for r in reversed(rows)]
+
+
+# ---- Safe read-only SQL (for the chat text-to-SQL feature) ------------------
+def run_readonly_sql(sql: str) -> dict[str, Any]:
+    """Execute a validated SELECT. Returns {columns, rows}. Raises on error."""
+    with SessionLocal() as s:
+        result = s.execute(text(sql))
+        columns = list(result.keys())
+        rows = [dict(zip(columns, r)) for r in result.fetchall()]
+        # JSON-serialise datetimes etc.
+        for row in rows:
+            for k, v in list(row.items()):
+                if isinstance(v, datetime):
+                    row[k] = v.isoformat()
+        return {"columns": columns, "rows": rows}

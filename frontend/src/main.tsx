@@ -9,10 +9,13 @@ import { Dashboard } from './views/Dashboard';
 import { Tickers } from './views/Tickers';
 import { OptionsFlowView } from './views/OptionsFlow';
 import { Strategies } from './views/Strategies';
+import { Builder } from './views/Builder';
 import { Research } from './views/Research';
 import { News } from './views/News';
 import { PositionsOrders } from './views/PositionsOrders';
 import { Trades } from './views/Trades';
+import { Risk } from './views/Risk';
+import { Onboarding } from './views/Onboarding';
 import { SettingsView } from './views/Settings';
 import { Help } from './views/Help';
 
@@ -29,10 +32,13 @@ const router = createBrowserRouter(
         { path: 'tickers', element: <Tickers /> },
         { path: 'options', element: <OptionsFlowView /> },
         { path: 'strategies', element: <Strategies /> },
+        { path: 'builder', element: <Builder /> },
         { path: 'research', element: <Research /> },
         { path: 'news', element: <News /> },
         { path: 'positions', element: <PositionsOrders /> },
         { path: 'trades', element: <Trades /> },
+        { path: 'risk', element: <Risk /> },
+        { path: 'onboarding', element: <Onboarding /> },
         { path: 'settings', element: <SettingsView /> },
         { path: 'help', element: <Help /> },
       ],

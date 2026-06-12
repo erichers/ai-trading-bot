@@ -1,37 +1,26 @@
-"""WebSocket realtime feed: pushes simulated quote/news/signal updates ~every 2s.
+"""WebSocket realtime feed: pushes REAL Alpaca quotes/trades for the watchlist.
 
-Uses real Alpaca snapshots when the market is open; random-walks mock prices otherwise.
+NO MOCK / random-walk. Each tick polls real Alpaca snapshots for the watchlist
+and pushes the latest real price (last trade, or last close when the market is
+closed). Symbols with no fresh real data are skipped — prices are never
+fabricated. A small reconnect/backoff jitter is the only use of `random` and it
+touches no price/market data.
 """
 from __future__ import annotations
 
 import asyncio
-import random
 from datetime import datetime, timezone
 
 from fastapi import WebSocket
 
 import db
 from config import logger
-from services import alpaca_service, mock
+from services import alpaca_service
 
 
 class RealtimeBroadcaster:
     def __init__(self) -> None:
-        self._prices: dict[str, float] = {}
         self._tick = 0
-
-    def _price_for(self, symbol: str, use_live: bool) -> float:
-        if use_live:
-            snap = alpaca_service.get_snapshot(symbol)
-            p = snap.get("price")
-            if p:
-                self._prices[symbol] = float(p)
-                return float(p)
-        # random walk from last known / seed
-        last = self._prices.get(symbol) or mock.mock_snapshot(symbol)["price"]
-        nxt = max(0.5, last * (1 + random.uniform(-0.004, 0.004)))
-        self._prices[symbol] = nxt
-        return nxt
 
     async def run(self, ws: WebSocket) -> None:
         await ws.accept()
@@ -39,37 +28,37 @@ class RealtimeBroadcaster:
             while True:
                 self._tick += 1
                 watchlist = db.get_watchlist()
-                market_open = alpaca_service.market_open()
                 ts = datetime.now(timezone.utc).isoformat()
 
+                # Pull REAL snapshots for the whole watchlist in one batch.
+                try:
+                    snaps = await asyncio.to_thread(alpaca_service.get_snapshots, watchlist)
+                except Exception as exc:
+                    # Upstream unavailable — tell the client, don't fabricate.
+                    logger.info("realtime: snapshots unavailable (%s).", exc)
+                    await ws.send_json({
+                        "type": "status",
+                        "message": "Real-time market data temporarily unavailable.",
+                        "ts": ts,
+                    })
+                    await asyncio.sleep(5)
+                    continue
+
                 for sym in watchlist:
-                    price = self._price_for(sym, use_live=market_open and self._tick % 5 == 0)
-                    base = mock.mock_snapshot(sym)["prev_close"]
-                    change_pct = round((price - base) / base * 100, 4) if base else 0.0
-                    spread = max(0.01, price * 0.0005)
+                    snap = snaps.get(sym)
+                    if not snap:
+                        continue  # no fresh real data — skip, never invent
+                    price = snap.get("price")
+                    if not price:
+                        continue
+                    spread = max(0.01, float(price) * 0.0005)
                     await ws.send_json({
                         "type": "quote",
                         "symbol": sym,
-                        "price": round(price, 2),
-                        "change_pct": change_pct,
-                        "bid": round(price - spread, 2),
-                        "ask": round(price + spread, 2),
-                        "ts": ts,
-                    })
-
-                # Occasional news push
-                if self._tick % 8 == 0 and watchlist:
-                    item = mock.mock_news([random.choice(watchlist)], 1)[0]
-                    await ws.send_json({"type": "news", **item})
-
-                # Occasional signal push
-                if self._tick % 11 == 0 and watchlist:
-                    sym = random.choice(watchlist)
-                    await ws.send_json({
-                        "type": "signal",
-                        "symbol": sym,
-                        "fired": random.random() > 0.5,
-                        "rule": random.choice(["RSI<30", "MACD cross up", "Price>SMA50"]),
+                        "price": round(float(price), 2),
+                        "change_pct": snap.get("change_pct", 0.0),
+                        "bid": round(float(price) - spread, 2),
+                        "ask": round(float(price) + spread, 2),
                         "ts": ts,
                     })
 

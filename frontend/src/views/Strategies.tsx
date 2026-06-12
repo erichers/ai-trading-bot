@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Check, Plus, Trash2, X, Zap, Save, FlaskConical } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { Check, Plus, Trash2, X, Zap, Save, FlaskConical, Wand2 } from 'lucide-react';
 import { api } from '@/api/client';
 import type {
   IndicatorCatalogItem,
@@ -311,9 +312,14 @@ export function Strategies() {
       <Panel
         title="Strategies"
         right={
-          <button className="btn-amber flex items-center gap-1" onClick={newDraft}>
-            <Plus size={12} /> New
-          </button>
+          <div className="flex items-center gap-1">
+            <Link to="/builder" className="btn flex items-center gap-1" title="Guided bot builder">
+              <Wand2 size={12} /> Builder
+            </Link>
+            <button className="btn-amber flex items-center gap-1" onClick={newDraft}>
+              <Plus size={12} /> New
+            </button>
+          </div>
         }
         bodyClassName="overflow-y-auto"
       >

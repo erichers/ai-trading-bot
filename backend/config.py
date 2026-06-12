@@ -34,10 +34,17 @@ class Settings(BaseSettings):
     alpaca_options_feed: str = "indicative"
     anthropic_api_key: str = ""
 
-    # Research provider (local Ollama by default).
-    research_provider: str = "ollama"
+    # Research providers: primary (kimi) -> backup (ollama/gemma). Chat uses Gemma.
+    research_provider: str = "kimi"
+    research_backup_provider: str = "ollama"
+    chat_provider: str = "ollama"
     ollama_base_url: str = "http://localhost:11434"
     research_model: str = "gemma4:e2b"
+
+    # Moonshot Kimi (OpenAI-compatible). NOTE: kimi-k2.5 requires temperature=1.
+    kimi_api_key: str = ""
+    kimi_base_url: str = "https://api.moonshot.ai/v1"
+    kimi_model: str = "kimi-k2.5"
 
     # MySQL database (MAMP defaults).
     db_host: str = "127.0.0.1"
@@ -58,14 +65,23 @@ class Settings(BaseSettings):
     def anthropic_configured(self) -> bool:
         return bool(self.anthropic_api_key)
 
+    @property
+    def kimi_configured(self) -> bool:
+        return bool(self.kimi_api_key)
+
+    @property
+    def effective_research_model(self) -> str:
+        """The model id of the effective primary research provider."""
+        return self.kimi_model if (self.research_provider or "").lower() == "kimi" else self.research_model
+
 
 @lru_cache
 def get_settings() -> Settings:
     s = Settings()
     if not s.alpaca_configured:
-        logger.warning("Alpaca credentials missing — Alpaca calls will return mock data.")
-    if not s.anthropic_configured:
-        logger.warning("Anthropic API key missing — AI research will return mock data.")
+        logger.warning("Alpaca credentials missing — Alpaca calls will raise 503 (NO MOCK).")
+    if (s.research_provider or "").lower() == "kimi" and not s.kimi_configured:
+        logger.warning("Kimi API key missing — primary research will fall back to Ollama/Gemma.")
     return s
 
 

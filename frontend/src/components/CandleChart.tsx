@@ -72,10 +72,15 @@ const toTime = (iso: string): UTCTimestamp =>
 export function CandleChart({
   bars,
   overlays = { volume: true },
-  height = 400,
+  height,
 }: {
   bars: Bar[];
   overlays?: Overlay;
+  /**
+   * Optional fixed pixel height. When omitted, the chart fills 100% of its
+   * parent's height (the container is h-full) and tracks live resizes via a
+   * ResizeObserver — used by the resizable dashboard tiles.
+   */
   height?: number;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -86,8 +91,11 @@ export function CandleChart({
 
   // Init chart once.
   useEffect(() => {
-    if (!containerRef.current) return;
-    const chart = createChart(containerRef.current, {
+    const el = containerRef.current;
+    if (!el) return;
+    const initW = el.clientWidth || 600;
+    const initH = (height ?? el.clientHeight) || 300;
+    const chart = createChart(el, {
       layout: {
         background: { type: ColorType.Solid, color: '#0d1117' },
         textColor: '#8b94a3',
@@ -101,8 +109,9 @@ export function CandleChart({
       crosshair: { mode: CrosshairMode.Normal },
       rightPriceScale: { borderColor: '#1f2530' },
       timeScale: { borderColor: '#1f2530', timeVisible: true, secondsVisible: false },
-      width: containerRef.current.clientWidth,
-      height,
+      width: initW,
+      height: initH,
+      autoSize: false,
     });
     chartRef.current = chart;
     candleRef.current = chart.addCandlestickSeries({
@@ -119,11 +128,18 @@ export function CandleChart({
     });
     chart.priceScale('vol').applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
 
+    // Fill the container in both dimensions and resize live. When a fixed
+    // `height` is supplied we honor it; otherwise we use the container height.
     const ro = new ResizeObserver(() => {
-      if (containerRef.current)
-        chart.applyOptions({ width: containerRef.current.clientWidth });
+      if (!containerRef.current) return;
+      const w = containerRef.current.clientWidth;
+      const h = height ?? containerRef.current.clientHeight;
+      if (w > 0 && h > 0) {
+        chart.applyOptions({ width: w, height: h });
+        chart.timeScale().fitContent();
+      }
     });
-    ro.observe(containerRef.current);
+    ro.observe(el);
     return () => {
       ro.disconnect();
       chart.remove();
@@ -200,5 +216,11 @@ export function CandleChart({
     chartRef.current.timeScale().fitContent();
   }, [bars, closes, overlays.sma, overlays.ema, overlays.bbands, overlays.volume]);
 
-  return <div ref={containerRef} className="w-full" style={{ height }} />;
+  return (
+    <div
+      ref={containerRef}
+      className="h-full w-full"
+      style={height !== undefined ? { height } : undefined}
+    />
+  );
 }

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Activity } from 'lucide-react';
 import { api } from '@/api/client';
-import type { OptionContract, OptionsFlow } from '@/api/types';
+import type { OptionContract, OptionExpiration, OptionsFlow } from '@/api/types';
 import { money, num, compact } from '@/lib/format';
 import { Panel, Spinner, Empty, ErrorState, Badge, Toggle } from '@/components/ui';
 import { TickerSearch } from '@/components/TickerSearch';
@@ -293,7 +293,7 @@ export function OptionsFlowView() {
   const { symbol, setSymbol } = useSymbol();
   const [period, setPeriod] = useState<Period>('weekly');
   const [expiration, setExpiration] = useState<string>('');
-  const [expirations, setExpirations] = useState<string[]>([]);
+  const [expirations, setExpirations] = useState<OptionExpiration[]>([]);
   const [expError, setExpError] = useState<string | null>(null);
 
   // Load expirations whenever the symbol changes; reset selected expiration.
@@ -306,7 +306,7 @@ export function OptionsFlowView() {
       .then((exps) => {
         if (cancelled) return;
         setExpirations(exps);
-        setExpiration(exps[0] ?? '');
+        setExpiration(exps[0]?.date ?? '');
       })
       .catch((e: Error) => {
         if (cancelled) return;
@@ -361,8 +361,8 @@ export function OptionsFlowView() {
           >
             {expirations.length === 0 && <option value="">{expError ? 'unavailable' : '—'}</option>}
             {expirations.map((e) => (
-              <option key={e} value={e}>
-                {e}
+              <option key={e.date} value={e.date}>
+                {e.date} {e.type === 'weekly' ? '(W)' : '(M)'}
               </option>
             ))}
           </select>

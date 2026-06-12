@@ -1,15 +1,28 @@
-"""Alpaca wrappers. Every method falls back to realistic mock data on failure.
+"""Alpaca wrappers. REAL data only — NO MOCK FALLBACK.
 
 Uses alpaca-py SDK (TradingClient / StockHistoricalDataClient / NewsClient).
-Paper accounts use the IEX feed for market data.
+Paper accounts use the IEX feed for market data. On any failure (missing creds,
+upstream error) these raise fastapi.HTTPException: 424 when the SDK/creds are
+missing (a missing dependency), 503 when an upstream Alpaca call fails.
 """
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from fastapi import HTTPException
+
 from config import logger, settings
-from services import mock
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _no_client() -> HTTPException:
+    if not _sdk_ok:
+        return HTTPException(status_code=424, detail="Alpaca SDK not importable on the server.")
+    return HTTPException(status_code=424, detail="Alpaca credentials not configured.")
 
 # ---- Lazy SDK import & client construction ----------------------------------
 _trading_client = None
@@ -65,7 +78,7 @@ try:
 
     _sdk_ok = True
 except Exception as exc:  # pragma: no cover - import guard
-    logger.warning("alpaca-py SDK not importable (%s) — running in mock-only mode.", exc)
+    logger.warning("alpaca-py SDK not importable (%s) — Alpaca calls will raise 424.", exc)
     _sdk_ok = False
 
 
@@ -140,7 +153,7 @@ def _tf(timeframe: str):
 def get_account() -> dict[str, Any]:
     client = _get_trading()
     if client is None:
-        return mock.mock_account()
+        raise _no_client()
     try:
         a = client.get_account()
         equity = float(a.equity)
@@ -157,15 +170,17 @@ def get_account() -> dict[str, Any]:
             "daytrade_count": int(a.daytrade_count),
             "status": str(a.status.value if hasattr(a.status, "value") else a.status),
         }
+    except HTTPException:
+        raise
     except Exception as exc:
-        logger.warning("get_account failed (%s) — returning mock.", exc)
-        return mock.mock_account()
+        logger.warning("get_account failed (%s).", exc)
+        raise HTTPException(status_code=503, detail=f"Alpaca account unavailable: {exc}")
 
 
 def get_positions() -> list[dict[str, Any]]:
     client = _get_trading()
     if client is None:
-        return mock.mock_positions()
+        raise _no_client()
     try:
         positions = client.get_all_positions()
         return [
@@ -182,9 +197,11 @@ def get_positions() -> list[dict[str, Any]]:
             }
             for p in positions
         ]
+    except HTTPException:
+        raise
     except Exception as exc:
-        logger.warning("get_positions failed (%s) — returning mock.", exc)
-        return mock.mock_positions()
+        logger.warning("get_positions failed (%s).", exc)
+        raise HTTPException(status_code=503, detail=f"Alpaca positions unavailable: {exc}")
 
 
 def _order_to_dict(o) -> dict[str, Any]:
@@ -216,7 +233,7 @@ def _order_to_dict(o) -> dict[str, Any]:
 def get_orders(status: str = "all") -> list[dict[str, Any]]:
     client = _get_trading()
     if client is None:
-        return mock.mock_orders(status)
+        raise _no_client()
     try:
         status_map = {
             "open": QueryOrderStatus.OPEN,
@@ -226,9 +243,11 @@ def get_orders(status: str = "all") -> list[dict[str, Any]]:
         req = GetOrdersRequest(status=status_map.get(status, QueryOrderStatus.ALL), limit=100)
         orders = client.get_orders(filter=req)
         return [_order_to_dict(o) for o in orders]
+    except HTTPException:
+        raise
     except Exception as exc:
-        logger.warning("get_orders failed (%s) — returning mock.", exc)
-        return mock.mock_orders(status)
+        logger.warning("get_orders failed (%s).", exc)
+        raise HTTPException(status_code=503, detail=f"Alpaca orders unavailable: {exc}")
 
 
 import re as _re
@@ -242,36 +261,10 @@ def _is_option_order(payload: dict[str, Any]) -> bool:
     return payload.get("asset_class") == "option" or bool(_OCC_RE.match(sym))
 
 
-def _mock_order_ack(payload: dict[str, Any], *, error: str | None = None) -> dict[str, Any]:
-    ack = {
-        "id": "mock-new-order",
-        "client_order_id": None,
-        "symbol": payload["symbol"].upper(),
-        "asset_class": "option" if _is_option_order(payload) else "us_equity",
-        "qty": float(payload["qty"]),
-        "side": payload["side"],
-        "type": payload.get("type", "market"),
-        "order_class": None,
-        "time_in_force": payload.get("time_in_force", "day"),
-        "status": "accepted",
-        "limit_price": payload.get("limit_price"),
-        "stop_price": payload.get("stop_price"),
-        "filled_avg_price": None,
-        "filled_qty": 0.0,
-        "submitted_at": mock.now_iso(),
-        "filled_at": None,
-    }
-    if error:
-        ack["error"] = error
-    return ack
-
-
 def place_order(payload: dict[str, Any]) -> dict[str, Any]:
     client = _get_trading()
     if client is None:
-        ack = _mock_order_ack(payload)
-        ack["raw"] = {"mock": True, "reason": "no_alpaca_client"}
-        return ack
+        raise _no_client()
 
     is_option = _is_option_order(payload)
     try:
@@ -326,11 +319,11 @@ def place_order(payload: dict[str, Any]) -> dict[str, Any]:
         except Exception:
             out["raw"] = {"id": out.get("id")}
         return out
+    except HTTPException:
+        raise
     except Exception as exc:
-        logger.warning("place_order failed (%s) — returning mock ack.", exc)
-        ack = _mock_order_ack(payload, error=str(exc))
-        ack["raw"] = {"mock": True, "error": str(exc)}
-        return ack
+        logger.warning("place_order failed (%s).", exc)
+        raise HTTPException(status_code=503, detail=f"Order placement failed: {exc}")
 
 
 def cancel_order(order_id: str) -> dict[str, Any]:
@@ -348,7 +341,7 @@ def cancel_order(order_id: str) -> dict[str, Any]:
 def cancel_all_orders() -> dict[str, Any]:
     client = _get_trading()
     if client is None:
-        return {"cancelled": len(mock.mock_orders("open"))}
+        raise _no_client()
     try:
         responses = client.cancel_orders()
         return {"cancelled": len(responses) if responses else 0}
@@ -360,28 +353,35 @@ def cancel_all_orders() -> dict[str, Any]:
 def get_clock() -> dict[str, Any]:
     client = _get_trading()
     if client is None:
-        return mock.mock_clock()
+        raise _no_client()
     try:
         c = client.get_clock()
         return {
             "is_open": bool(c.is_open),
             "next_open": c.next_open.isoformat() if c.next_open else None,
             "next_close": c.next_close.isoformat() if c.next_close else None,
-            "timestamp": c.timestamp.isoformat() if c.timestamp else mock.now_iso(),
+            "timestamp": c.timestamp.isoformat() if c.timestamp else _now_iso(),
         }
+    except HTTPException:
+        raise
     except Exception as exc:
-        logger.warning("get_clock failed (%s) — returning mock.", exc)
-        return mock.mock_clock()
+        logger.warning("get_clock failed (%s).", exc)
+        raise HTTPException(status_code=503, detail=f"Alpaca clock unavailable: {exc}")
 
 
 def market_open() -> bool:
-    return bool(get_clock().get("is_open"))
+    """Best-effort: returns False (not an error) if the clock can't be reached,
+    so callers that merely want a boolean don't 503 on a probe."""
+    try:
+        return bool(get_clock().get("is_open"))
+    except Exception:
+        return False
 
 
 def get_calendar(start: str | None, end: str | None) -> list[dict[str, Any]]:
     client = _get_trading()
     if client is None:
-        return mock.mock_calendar(start, end)
+        raise _no_client()
     try:
         kwargs = {}
         if start:
@@ -400,16 +400,18 @@ def get_calendar(start: str | None, end: str | None) -> list[dict[str, Any]]:
             }
             for d in cal
         ]
+    except HTTPException:
+        raise
     except Exception as exc:
-        logger.warning("get_calendar failed (%s) — returning mock.", exc)
-        return mock.mock_calendar(start, end)
+        logger.warning("get_calendar failed (%s).", exc)
+        raise HTTPException(status_code=503, detail=f"Alpaca calendar unavailable: {exc}")
 
 
 # ---- Assets -----------------------------------------------------------------
 def search_assets(search: str, limit: int) -> list[dict[str, Any]]:
     client = _get_trading()
     if client is None:
-        return mock.mock_assets(search, limit)
+        raise _no_client()
     try:
         req = GetAssetsRequest(status=AssetStatus.ACTIVE, asset_class=AssetClass.US_EQUITY)
         assets = client.get_all_assets(req)
@@ -427,17 +429,19 @@ def search_assets(search: str, limit: int) -> list[dict[str, Any]]:
             })
             if len(out) >= limit:
                 break
-        return out or mock.mock_assets(search, limit)
+        return out
+    except HTTPException:
+        raise
     except Exception as exc:
-        logger.warning("search_assets failed (%s) — returning mock.", exc)
-        return mock.mock_assets(search, limit)
+        logger.warning("search_assets failed (%s).", exc)
+        raise HTTPException(status_code=503, detail=f"Alpaca asset search unavailable: {exc}")
 
 
 # ---- Market data ------------------------------------------------------------
 def get_bars(symbol: str, timeframe: str, limit: int) -> list[dict[str, Any]]:
     client = _get_data()
     if client is None:
-        return mock.mock_bars(symbol, timeframe, limit)
+        raise _no_client()
     try:
         start = datetime.now(timezone.utc) - timedelta(days=400)
         req = StockBarsRequest(
@@ -457,16 +461,22 @@ def get_bars(symbol: str, timeframe: str, limit: int) -> list[dict[str, Any]]:
             }
             for b in bars
         ]
-        return out[-limit:] if out else mock.mock_bars(symbol, timeframe, limit)
+        if not out:
+            raise HTTPException(
+                status_code=503,
+                detail=f"No bars returned for {symbol} ({timeframe}).")
+        return out[-limit:]
+    except HTTPException:
+        raise
     except Exception as exc:
-        logger.warning("get_bars failed for %s (%s) — returning mock.", symbol, exc)
-        return mock.mock_bars(symbol, timeframe, limit)
+        logger.warning("get_bars failed for %s (%s).", symbol, exc)
+        raise HTTPException(status_code=503, detail=f"Bars unavailable for {symbol}: {exc}")
 
 
 def get_quote(symbol: str) -> dict[str, Any]:
     client = _get_data()
     if client is None:
-        return mock.mock_quote(symbol)
+        raise _no_client()
     try:
         req = StockLatestQuoteRequest(symbol_or_symbols=symbol, feed=DataFeed.IEX)
         resp = client.get_stock_latest_quote(req)
@@ -478,11 +488,13 @@ def get_quote(symbol: str) -> dict[str, Any]:
             "bid_size": int(q.bid_size),
             "ask_size": int(q.ask_size),
             "last": round((float(q.bid_price) + float(q.ask_price)) / 2, 2),
-            "timestamp": q.timestamp.isoformat() if q.timestamp else mock.now_iso(),
+            "timestamp": q.timestamp.isoformat() if q.timestamp else _now_iso(),
         }
+    except HTTPException:
+        raise
     except Exception as exc:
-        logger.warning("get_quote failed for %s (%s) — returning mock.", symbol, exc)
-        return mock.mock_quote(symbol)
+        logger.warning("get_quote failed for %s (%s).", symbol, exc)
+        raise HTTPException(status_code=503, detail=f"Quote unavailable for {symbol}: {exc}")
 
 
 def _snapshot_obj_to_dict(symbol: str, snap) -> dict[str, Any]:
@@ -509,39 +521,48 @@ def _snapshot_obj_to_dict(symbol: str, snap) -> dict[str, Any]:
 def get_snapshot(symbol: str) -> dict[str, Any]:
     client = _get_data()
     if client is None:
-        return mock.mock_snapshot(symbol)
+        raise _no_client()
     try:
         req = StockSnapshotRequest(symbol_or_symbols=symbol, feed=DataFeed.IEX)
         resp = client.get_stock_snapshot(req)
         snap = resp[symbol]
+        if snap is None:
+            raise HTTPException(status_code=503, detail=f"No snapshot for {symbol}.")
         return _snapshot_obj_to_dict(symbol, snap)
+    except HTTPException:
+        raise
     except Exception as exc:
-        logger.warning("get_snapshot failed for %s (%s) — returning mock.", symbol, exc)
-        return mock.mock_snapshot(symbol)
+        logger.warning("get_snapshot failed for %s (%s).", symbol, exc)
+        raise HTTPException(status_code=503, detail=f"Snapshot unavailable for {symbol}: {exc}")
 
 
 def get_snapshots(symbols: list[str]) -> dict[str, Any]:
     client = _get_data()
     if client is None:
-        return {s: mock.mock_snapshot(s) for s in symbols}
+        raise _no_client()
     try:
         req = StockSnapshotRequest(symbol_or_symbols=symbols, feed=DataFeed.IEX)
         resp = client.get_stock_snapshot(req)
         out: dict[str, Any] = {}
         for s in symbols:
             snap = resp.get(s) if hasattr(resp, "get") else resp[s]
-            out[s] = _snapshot_obj_to_dict(s, snap) if snap else mock.mock_snapshot(s)
+            if snap is not None:
+                out[s] = _snapshot_obj_to_dict(s, snap)
+        if not out:
+            raise HTTPException(status_code=503, detail="No snapshots returned for watchlist.")
         return out
+    except HTTPException:
+        raise
     except Exception as exc:
-        logger.warning("get_snapshots failed (%s) — returning mock.", exc)
-        return {s: mock.mock_snapshot(s) for s in symbols}
+        logger.warning("get_snapshots failed (%s).", exc)
+        raise HTTPException(status_code=503, detail=f"Snapshots unavailable: {exc}")
 
 
 # ---- News -------------------------------------------------------------------
 def get_news(symbols: list[str], limit: int) -> list[dict[str, Any]]:
     client = _get_news()
     if client is None:
-        return mock.mock_news(symbols, limit)
+        raise _no_client()
     try:
         req = NewsRequest(symbols=",".join(symbols) if symbols else None, limit=limit)
         resp = client.get_news(req)
@@ -559,25 +580,14 @@ def get_news(symbols: list[str], limit: int) -> list[dict[str, Any]]:
                 "source": n.source,
                 "author": n.author,
                 "url": n.url,
-                "created_at": n.created_at.isoformat() if n.created_at else mock.now_iso(),
+                "created_at": n.created_at.isoformat() if n.created_at else _now_iso(),
                 "symbols": list(n.symbols) if n.symbols else [],
                 "image": img,
             })
-        return out or mock.mock_news(symbols, limit)
+        # An empty real news feed is valid (not an error) — return [].
+        return out
+    except HTTPException:
+        raise
     except Exception as exc:
-        logger.warning("get_news failed (%s) — returning mock.", exc)
-        return mock.mock_news(symbols, limit)
-
-
-# ---- Options ----------------------------------------------------------------
-def get_option_expirations(symbol: str) -> list[str]:
-    # Alpaca options availability varies; default to realistic mock chains.
-    return mock.mock_expirations(symbol)
-
-
-def get_option_chain(symbol: str, expiration: str | None, opt_type: str) -> list[dict[str, Any]]:
-    return mock.mock_option_chain(symbol, expiration, opt_type)
-
-
-def get_option_flow(symbol: str, period: str) -> dict[str, Any]:
-    return mock.mock_option_flow(symbol, period)
+        logger.warning("get_news failed (%s).", exc)
+        raise HTTPException(status_code=503, detail=f"News unavailable: {exc}")

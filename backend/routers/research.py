@@ -1,7 +1,7 @@
-"""AI research routes (Ollama/Gemma-backed with mock fallback); persisted to MySQL."""
+"""AI research routes (Kimi primary -> Gemma backup, NO MOCK); persisted to MySQL."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 
 import db
 from config import logger
@@ -13,7 +13,10 @@ router = APIRouter(prefix="/research", tags=["research"])
 
 @router.post("/analyze")
 def analyze(body: AnalyzeRequest):
-    result = research_svc.analyze(body.symbol)
+    try:
+        result = research_svc.analyze(body.symbol)
+    except research_svc.ResearchUnavailable as exc:
+        raise HTTPException(status_code=503, detail=f"Research unavailable: {exc}")
     try:
         db.insert_research(result)
     except Exception as exc:

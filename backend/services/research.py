@@ -1,13 +1,13 @@
-"""AI research. Default provider = local Ollama (Gemma). Anthropic optional.
+"""AI research. Primary provider = Moonshot Kimi (cloud); backup = local Gemma
+via Ollama. NO MOCK FALLBACK — if every provider fails the caller raises a 503.
 
-Calls POST {OLLAMA_BASE_URL}/api/chat with format:"json". Robustly parses the
-returned JSON (strips code fences) and falls back to deterministic mock on any
-failure so the UI never breaks.
+Calls go through providers in order (kimi -> ollama). Robustly parses the
+returned JSON (strips code fences). The returned dict's ``provider``/``model``
+reflect whoever actually answered.
 """
 from __future__ import annotations
 
 import json
-import random
 import re
 from datetime import datetime, timezone
 from typing import Any
@@ -15,20 +15,9 @@ from typing import Any
 import httpx
 
 from config import logger, settings
-from services import alpaca_service, indicators
+from services import alpaca_service, indicators, kimi
 
 _OLLAMA_TIMEOUT = 120.0
-
-# Anthropic is an optional alternate provider.
-_anthropic_client = None
-_anthropic_ok = False
-try:
-    import anthropic
-    _anthropic_ok = True
-except Exception:  # pragma: no cover
-    _anthropic_ok = False
-
-_ANTHROPIC_MODEL = "claude-sonnet-4-6"
 
 
 def _now() -> str:
@@ -43,13 +32,26 @@ def ollama_connected() -> bool:
         return False
 
 
-def _anthropic():
-    global _anthropic_client
-    if not (_anthropic_ok and settings.anthropic_configured):
-        return None
-    if _anthropic_client is None:
-        _anthropic_client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
-    return _anthropic_client
+def _provider_order() -> list[str]:
+    """Ordered list of distinct providers to try: primary then backup."""
+    out: list[str] = []
+    for p in (settings.research_provider, settings.research_backup_provider):
+        p = (p or "").lower().strip()
+        if p and p not in out:
+            out.append(p)
+    return out or ["ollama"]
+
+
+def _call_provider(provider: str, system: str, user: str, *,
+                   json_format: bool, num_predict: int) -> tuple[str, str]:
+    """Call one provider. Returns (content, model_id). Raises on failure."""
+    if provider == "kimi":
+        content = kimi.chat(system, user, json_format=json_format, max_tokens=max(num_predict, 1500))
+        return content, settings.kimi_model
+    if provider == "ollama":
+        content = _ollama_chat(system, user, json_format=json_format, num_predict=num_predict)
+        return content, settings.research_model
+    raise RuntimeError(f"unknown research provider '{provider}'")
 
 
 _SYSTEM = (
@@ -129,45 +131,26 @@ def _coerce(data: dict[str, Any], symbol: str, snapshot: dict, provider: str,
     }
 
 
-def _mock_analyze(symbol: str, snapshot: dict, ind: dict) -> dict[str, Any]:
-    price = snapshot.get("price", 100.0)
-    rsi = ind.get("rsi14") or 50.0
-    bullish = rsi < 45
-    sentiment = round(random.uniform(0.1, 0.6) * (1 if bullish else -1), 3)
-    conviction = random.randint(45, 80)
-    action = "buy" if bullish else ("hold" if 45 <= rsi <= 60 else "reduce")
-    return {
-        "symbol": symbol,
-        "thesis": (
-            f"{symbol} is trading near ${price:.2f}. RSI(14) at {rsi:.1f} suggests "
-            f"{'oversold conditions favoring a bounce' if bullish else 'neutral-to-extended momentum'}. "
-            "Trend and volume profile support a measured position."
-        ),
-        "sentiment_score": sentiment,
-        "conviction": conviction,
-        "key_risks": [
-            "Broad market drawdown / risk-off rotation",
-            "Earnings or guidance surprise",
-            "Macro rate shocks compressing multiples",
-        ],
-        "suggested_action": action,
-        "suggested_stop": round(price * 0.95, 2),
-        "suggested_target": round(price * 1.08, 2),
-        "regime": random.choice(["trend-up", "range", "high-vol"]),
-        "bear_case": (
-            f"If {symbol} loses near-term support, momentum could flip; elevated valuations "
-            "leave little cushion and a sector de-rating would pressure the name further."
-        ),
-        "provider": "mock",
-        "model": "mock",
-        "generated_at": _now(),
-    }
+class ResearchUnavailable(Exception):
+    """Raised when every research provider fails. Routers map this to a 503."""
 
 
-def _ollama_chat(system: str, user: str, *, json_format: bool = True) -> str:
+def _ollama_chat(
+    system: str,
+    user: str,
+    *,
+    json_format: bool = True,
+    num_predict: int = 700,
+) -> str:
     payload = {
         "model": settings.research_model,
         "stream": False,
+        # gemma4 is a reasoning model; thinking tokens otherwise starve the
+        # actual output and we get empty content. Disable it.
+        "think": False,
+        # Keep the model resident so subsequent calls don't pay reload latency.
+        "keep_alive": "30m",
+        "options": {"num_predict": num_predict, "temperature": 0.4},
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
@@ -181,38 +164,36 @@ def _ollama_chat(system: str, user: str, *, json_format: bool = True) -> str:
         return r.json()["message"]["content"]
 
 
+def _safe_news(symbols: list[str], limit: int) -> list[dict[str, Any]]:
+    """News is supplementary context — never let its absence block research."""
+    try:
+        return alpaca_service.get_news(symbols, limit)
+    except Exception as exc:
+        logger.info("research: news unavailable for %s (%s) — proceeding without.",
+                    symbols, exc)
+        return []
+
+
 def analyze(symbol: str) -> dict[str, Any]:
     symbol = symbol.upper()
     bars = alpaca_service.get_bars(symbol, "1Day", 120)
     ind = indicators.compute_all(bars)
     snapshot = alpaca_service.get_snapshot(symbol)
-    news = alpaca_service.get_news([symbol], 5)
+    news = _safe_news([symbol], 5)
     prompt = _build_prompt(symbol, snapshot, ind, bars, news)
 
-    provider = (settings.research_provider or "ollama").lower()
-
-    if provider == "anthropic" and _anthropic() is not None:
+    last_err: Exception | None = None
+    for provider in _provider_order():
         try:
-            resp = _anthropic().messages.create(
-                model=_ANTHROPIC_MODEL,
-                max_tokens=1500,
-                system=_SYSTEM,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            text = next((b.text for b in resp.content if b.type == "text"), "")
-            data = _parse_json_loose(text)
-            return _coerce(data, symbol, snapshot, "anthropic", _ANTHROPIC_MODEL)
+            content, model = _call_provider(
+                provider, _SYSTEM, prompt, json_format=True, num_predict=900)
+            data = _parse_json_loose(content)
+            return _coerce(data, symbol, snapshot, provider, model)
         except Exception as exc:
-            logger.warning("Anthropic analyze failed (%s) — falling back.", exc)
-
-    # Default: Ollama / Gemma.
-    try:
-        content = _ollama_chat(_SYSTEM, prompt, json_format=True)
-        data = _parse_json_loose(content)
-        return _coerce(data, symbol, snapshot, "ollama", settings.research_model)
-    except Exception as exc:
-        logger.warning("Ollama analyze failed (%s) — returning mock.", exc)
-        return _mock_analyze(symbol, snapshot, ind)
+            last_err = exc
+            logger.warning("research analyze via %s failed (%s) — trying next provider.",
+                           provider, exc)
+    raise ResearchUnavailable(f"all research providers failed: {last_err}")
 
 
 def briefing(watchlist: list[str]) -> dict[str, Any]:
@@ -235,33 +216,125 @@ def briefing(watchlist: list[str]) -> dict[str, Any]:
         f"Average sentiment {avg:+.2f}; regime reads {regime}."
     )
 
-    provider = (settings.research_provider or "ollama").lower()
     user = (
         "Write a concise 2-sentence morning market briefing for this watchlist "
         f"snapshot: {json.dumps(items)}. Be concrete. Respond as JSON {{\"summary\": string}}."
     )
-    try:
-        if provider == "anthropic" and _anthropic() is not None:
-            resp = _anthropic().messages.create(
-                model=_ANTHROPIC_MODEL, max_tokens=400,
-                messages=[{"role": "user", "content": user}],
-            )
-            txt = next((b.text for b in resp.content if b.type == "text"), "")
-            summary = _parse_json_loose(txt).get("summary", summary)
-        else:
-            content = _ollama_chat(
-                "You are a market strategist. Respond with STRICT JSON only.",
-                user, json_format=True,
-            )
+    for provider in _provider_order():
+        try:
+            content, _ = _call_provider(
+                provider, "You are a market strategist. Respond with STRICT JSON only.",
+                user, json_format=True, num_predict=400)
             summary = _parse_json_loose(content).get("summary", summary)
-    except Exception as exc:
-        logger.warning("briefing LLM failed (%s) — using computed summary.", exc)
+            break
+        except Exception as exc:
+            logger.warning("briefing via %s failed (%s) — trying next.", provider, exc)
 
     return {
         "generated_at": _now(),
         "summary": summary,
         "items": items,
         "regime": regime,
+    }
+
+
+_DEEP_SYSTEM = (
+    "You are a senior equity research analyst writing an internal markdown report. "
+    "Write clear, well-structured GitHub-flavored markdown with section headers (##), "
+    "bullet points, and concrete numbers drawn from the supplied data. Do NOT invent "
+    "specific figures you were not given. Be decisive but balanced."
+)
+
+
+def _deep_disclaimer(kind: str) -> str:
+    if kind == "earnings":
+        return (
+            "> _Note: earnings detail below is LLM-synthesized from recent price action "
+            "and available news headlines — it is NOT a verified earnings transcript or "
+            "fundamentals feed. Treat dates/figures as indicative only._\n\n"
+        )
+    return (
+        "> _Note: this report is LLM-synthesized from market data and news headlines "
+        "available to the app. Verify any specific claims independently._\n\n"
+    )
+
+
+def generate_deep(symbol: str, kind: str = "deep") -> dict[str, Any]:
+    """Build a longer markdown research report (deep dive or earnings synthesis)."""
+    symbol = symbol.upper()
+    kind = kind if kind in ("deep", "earnings") else "deep"
+    bars = alpaca_service.get_bars(symbol, "1Day", 120)
+    ind = indicators.compute_all(bars)
+    snapshot = alpaca_service.get_snapshot(symbol)
+    news = _safe_news([symbol], 8)
+
+    recent_bars = bars[-30:]
+    bar_lines = "\n".join(
+        f"{b.get('t', '')[:10]} O{b['o']} H{b['h']} L{b['l']} C{b['c']} V{b['v']}"
+        for b in recent_bars
+    )
+    news_lines = "\n".join(f"- {n['headline']} ({n.get('source','')})" for n in news)
+
+    if kind == "earnings":
+        ask = (
+            f"Write an EARNINGS-FOCUSED markdown report for {symbol}. Sections: "
+            "## Setup into earnings, ## What the market expects, ## Key items to watch, "
+            "## Bull case, ## Bear case, ## Options-implied move (qualitative), "
+            "## Trade plan. Be explicit that earnings specifics are synthesized from "
+            "news, not a verified transcript."
+        )
+    else:
+        ask = (
+            f"Write a DEEP-DIVE markdown research report for {symbol}. Sections: "
+            "## Overview, ## Technical picture, ## Momentum & trend, ## Catalysts & news, "
+            "## Bull case, ## Bear case, ## Risks, ## Trade plan (entries, stops, targets)."
+        )
+
+    user = (
+        f"{ask}\n\n"
+        f"Latest snapshot: {json.dumps(snapshot)}\n\n"
+        f"Indicator snapshot: {json.dumps(ind)}\n\n"
+        f"Recent daily bars (oldest->newest):\n{bar_lines}\n\n"
+        f"Recent headlines:\n{news_lines or '(none)'}\n\n"
+        "Return ONLY markdown (no JSON, no preamble)."
+    )
+
+    provider = None
+    model = None
+    body = ""
+    last_err: Exception | None = None
+    for prov in _provider_order():
+        try:
+            content, mdl = _call_provider(
+                prov, _DEEP_SYSTEM, user, json_format=False, num_predict=1400)
+            content = (content or "").strip()
+            if content:
+                provider, model, body = prov, mdl, content
+                break
+        except Exception as exc:
+            last_err = exc
+            logger.warning("generate_deep via %s failed for %s (%s) — trying next.",
+                           prov, symbol, exc)
+
+    if not body:
+        raise ResearchUnavailable(
+            f"deep research unavailable for {symbol}: {last_err or 'empty response'}")
+
+    title = f"{symbol} {'earnings preview' if kind == 'earnings' else 'deep dive'}"
+    full_body = _deep_disclaimer(kind) + body
+    return {
+        "symbol": symbol,
+        "kind": kind,
+        "title": title,
+        "body": full_body,
+        "data": {
+            "snapshot": snapshot,
+            "indicators": ind,
+            "news": news[:8],
+        },
+        "provider": provider,
+        "model": model,
+        "generated_at": _now(),
     }
 
 

@@ -1,0 +1,226 @@
+"""Background research worker.
+
+Runs an asyncio loop (started from main.py's lifespan) that periodically calls
+research.analyze() for a universe of symbols, persisting each result to both the
+research_analyses and deep_research tables, and occasionally generating a market
+briefing. Config is persisted in the ``settings`` table under ``research_worker``.
+
+All blocking work (Ollama calls, Alpaca calls, DB writes) runs in a thread via
+asyncio.to_thread so the event loop — and the rest of the API — stays responsive.
+"""
+from __future__ import annotations
+
+import asyncio
+import time
+from datetime import datetime, timezone
+from typing import Any, Optional
+
+import db
+from config import logger
+from services import research as research_svc
+
+WORKER_KEY = "research_worker"
+
+DEFAULT_CONFIG: dict[str, Any] = {
+    "enabled": True,
+    "interval_sec": 900,
+    "universe": ["SPY", "QQQ", "TSLA", "META", "NVDA", "AAPL", "AMZN", "GOOGL", "MSFT", "AMD"],
+}
+
+# Per-symbol pause so we never hammer Ollama back-to-back.
+_SYMBOL_SLEEP = 2.0
+
+# Module-level runtime state (single worker per process).
+_task: Optional[asyncio.Task] = None
+_state: dict[str, Any] = {
+    "running": False,
+    "last_run": None,
+    "last_symbol": None,
+    "cycles": 0,
+}
+
+
+def get_config() -> dict[str, Any]:
+    stored = db.get_setting(WORKER_KEY)
+    if not isinstance(stored, dict):
+        stored = {}
+    return {**DEFAULT_CONFIG, **stored}
+
+
+def set_config(partial: dict[str, Any]) -> dict[str, Any]:
+    current = get_config()
+    merged = {**current, **{k: v for k, v in (partial or {}).items() if v is not None}}
+    db.set_setting(WORKER_KEY, merged)
+    return merged
+
+
+def status() -> dict[str, Any]:
+    cfg = get_config()
+    return {
+        "enabled": bool(cfg.get("enabled", True)),
+        "interval_sec": int(cfg.get("interval_sec", 900)),
+        "universe": cfg.get("universe", []),
+        "last_run": _state.get("last_run"),
+        "running": bool(_state.get("running")) and _task is not None and not _task.done(),
+        "count_today": _safe_count_today(),
+        "cycles": _state.get("cycles", 0),
+    }
+
+
+def _safe_count_today() -> int:
+    try:
+        return db.count_deep_research_today()
+    except Exception:
+        return 0
+
+
+def _analyze_one(symbol: str) -> None:
+    """Blocking: analyze a symbol and persist to research_analyses + deep_research."""
+    result = research_svc.analyze(symbol)
+    try:
+        db.insert_research(result)
+    except Exception as exc:
+        logger.warning("worker: insert_research failed for %s (%s).", symbol, exc)
+    body = (
+        f"## Thesis\n{result.get('thesis', '').strip()}\n\n"
+        f"## Bear case\n{result.get('bear_case', '').strip()}\n\n"
+        f"## Key risks\n"
+        + "\n".join(f"- {r}" for r in (result.get("key_risks") or []))
+    )
+    try:
+        db.insert_deep_research({
+            "symbol": symbol,
+            "kind": "analysis",
+            "title": f"{symbol} analysis",
+            "body": body,
+            "data": result,
+            "provider": result.get("provider"),
+            "model": result.get("model"),
+        })
+    except Exception as exc:
+        logger.warning("worker: insert_deep_research failed for %s (%s).", symbol, exc)
+
+
+def _briefing_once() -> None:
+    """Blocking: generate a market briefing, persist to briefings + deep_research."""
+    try:
+        universe = get_config().get("universe") or db.get_watchlist()
+        result = research_svc.briefing(universe)
+        db.insert_briefing(result)
+        items = result.get("items") or []
+        body = (
+            f"## Market briefing\n{result.get('summary', '').strip()}\n\n"
+            f"Regime: **{result.get('regime', 'range')}**\n\n"
+            "## Watchlist\n"
+            + "\n".join(f"- {i.get('note', '')}" for i in items)
+        )
+        db.insert_deep_research({
+            "symbol": "MARKET",
+            "kind": "market",
+            "title": "Market briefing",
+            "body": body,
+            "data": result,
+            "provider": research_svc.settings.research_provider,
+            "model": research_svc.settings.research_model,
+        })
+    except Exception as exc:
+        logger.warning("worker: briefing cycle failed (%s).", exc)
+
+
+def _deep_once(symbol: str, kind: str = "deep") -> None:
+    try:
+        doc = research_svc.generate_deep(symbol, kind)
+        db.insert_deep_research(doc)
+    except Exception as exc:
+        logger.warning("worker: deep generation failed for %s (%s).", symbol, exc)
+
+
+async def _run_cycle() -> None:
+    cfg = get_config()
+    universe = list(cfg.get("universe") or [])
+    logger.info("research worker: starting cycle over %d symbols.", len(universe))
+    for sym in universe:
+        if not get_config().get("enabled", True):
+            logger.info("research worker: disabled mid-cycle — stopping.")
+            return
+        _state["last_symbol"] = sym
+        try:
+            await asyncio.to_thread(_analyze_one, sym)
+            logger.info("research worker: analyzed %s.", sym)
+        except Exception as exc:
+            logger.warning("research worker: analyze %s failed (%s).", sym, exc)
+        await asyncio.sleep(_SYMBOL_SLEEP)
+
+    # One market briefing per cycle.
+    await asyncio.to_thread(_briefing_once)
+
+    # Occasionally produce a deep dive on the first symbol (rotates by cycle).
+    if universe:
+        idx = _state.get("cycles", 0) % len(universe)
+        kind = "earnings" if (_state.get("cycles", 0) % 2 == 1) else "deep"
+        await asyncio.to_thread(_deep_once, universe[idx], kind)
+
+    _state["cycles"] = _state.get("cycles", 0) + 1
+    _state["last_run"] = datetime.now(timezone.utc).isoformat()
+    logger.info("research worker: cycle complete (#%d).", _state["cycles"])
+
+
+async def _loop() -> None:
+    _state["running"] = True
+    # Small initial delay so app startup completes instantly.
+    await asyncio.sleep(3.0)
+    try:
+        while True:
+            cfg = get_config()
+            interval = max(30, int(cfg.get("interval_sec", 900)))
+            if cfg.get("enabled", True):
+                try:
+                    await _run_cycle()
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    logger.warning("research worker: cycle error (%s).", exc)
+            else:
+                logger.info("research worker: disabled — idling.")
+            # Sleep the interval in small chunks so config changes take effect.
+            slept = 0
+            while slept < interval:
+                await asyncio.sleep(min(10, interval - slept))
+                slept += 10
+    except asyncio.CancelledError:
+        logger.info("research worker: cancelled.")
+        raise
+    finally:
+        _state["running"] = False
+
+
+def start() -> None:
+    global _task
+    if _task is not None and not _task.done():
+        return
+    _task = asyncio.create_task(_loop())
+    logger.info("research worker: background task started.")
+
+
+def stop() -> None:
+    global _task
+    if _task is not None and not _task.done():
+        _task.cancel()
+    _task = None
+    _state["running"] = False
+
+
+def is_running() -> bool:
+    return _task is not None and not _task.done()
+
+
+async def shutdown() -> None:
+    global _task
+    if _task is not None:
+        _task.cancel()
+        try:
+            await _task
+        except (asyncio.CancelledError, Exception):
+            pass
+    _task = None
+    _state["running"] = False

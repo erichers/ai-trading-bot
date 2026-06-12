@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useMemo, type ReactNode } from 'react';
 import { api } from '@/api/client';
-import type { Account, Clock, Health, Position } from '@/api/types';
+import type { Account, Clock, Health, Position, RiskStatus } from '@/api/types';
 import { usePolling } from './usePolling';
 import { useWebSocket, type WSStatus, type LiveQuote } from './useWebSocket';
 
@@ -21,6 +21,9 @@ interface AppData {
   // Computed open risk = sum (current - stop)*qty; we approximate stop via
   // saved local stops or fall back to 2% below entry when unknown.
   openRisk: number;
+  // Risk Engine status (polled ~5s) for global banner + open-risk readout.
+  riskStatus: RiskStatus | undefined;
+  refetchRiskStatus: () => void;
 }
 
 const Ctx = createContext<AppData | null>(null);
@@ -31,6 +34,7 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
   const positionsQ = usePolling<Position[]>(() => api.positions(), 5000);
   const clockQ = usePolling<Clock>(() => api.clock(), 30000);
   const watchQ = usePolling<string[]>(() => api.watchlist(), 30000);
+  const riskQ = usePolling<RiskStatus>(() => api.riskStatus(), 5000);
   const { status: wsStatus, quotes } = useWebSocket();
 
   const positions = positionsQ.data ?? [];
@@ -83,6 +87,8 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
       quotes,
       backendDown,
       openRisk,
+      riskStatus: riskQ.data,
+      refetchRiskStatus: riskQ.refetch,
     }),
     [
       healthQ.data,
@@ -99,6 +105,8 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
       quotes,
       backendDown,
       openRisk,
+      riskQ.data,
+      riskQ.refetch,
     ],
   );
 

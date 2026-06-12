@@ -1,14 +1,36 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import * as React from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { X, Sparkles, ChevronDown, ChevronRight, Zap } from 'lucide-react';
+import { X, Sparkles, ChevronDown, ChevronRight, Zap, GripVertical, RotateCcw } from 'lucide-react';
+import RGL from 'react-grid-layout';
+
+// react-grid-layout ships `export =` typings whose namespace members aren't
+// importable by name under bundler resolution; pull them off the default.
+const { Responsive, WidthProvider } = RGL as unknown as {
+  Responsive: React.ComponentType<Record<string, unknown>>;
+  WidthProvider: <P>(c: React.ComponentType<P>) => React.ComponentType<P>;
+};
+
+// Minimal layout-item shape we persist (matches react-grid-layout's Layout).
+interface GridItem {
+  i: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  minW?: number;
+  minH?: number;
+}
+type GridLayouts = Record<string, GridItem[]>;
 import { api } from '@/api/client';
-import type { Briefing, Order, ResearchReport, SnapshotMap, Timeframe } from '@/api/types';
+import type { Briefing, Order, ResearchReport, RiskEvent, SnapshotMap, Timeframe } from '@/api/types';
 import { useAppData } from '@/hooks/useAppData';
 import { useSymbol } from '@/hooks/useSymbol';
 import { usePolling } from '@/hooks/usePolling';
 import { useBars } from '@/hooks/useBars';
 import { CandleChart, type Overlay } from '@/components/CandleChart';
 import { Sparkline } from '@/components/Sparkline';
+import { BotSetup } from '@/components/BotSetup';
 import { Panel, Spinner, Empty, ErrorState, Badge, Toggle } from '@/components/ui';
 import {
   money,
@@ -27,6 +49,20 @@ const TIMEFRAMES: { value: Timeframe; label: string }[] = [
   { value: '1Hour', label: '1H' },
   { value: '1Day', label: '1D' },
 ];
+
+// A grip rendered in a Panel's `right` slot. Only this element is the grid
+// drag handle (draggableHandle=".drag-handle"), so all other controls inside a
+// panel stay fully clickable.
+function DragHandle({ children }: { children?: ReactNode }) {
+  return (
+    <div className="flex items-center gap-2">
+      {children}
+      <span className="drag-handle inline-flex" title="Drag to move">
+        <GripVertical size={13} />
+      </span>
+    </div>
+  );
+}
 
 /* ---------- Equity strip ---------- */
 function StatCell({
@@ -54,7 +90,7 @@ function StatCell({
 function EquityStrip() {
   const { account, openRisk } = useAppData();
   return (
-    <div className="panel flex flex-row">
+    <div className="panel flex flex-row items-stretch h-full">
       <StatCell label="Equity" value={money(account?.equity ?? null)} />
       <StatCell label="Buying Power" value={money(account?.buying_power ?? null)} />
       <StatCell
@@ -71,6 +107,9 @@ function EquityStrip() {
         tone="text-amber"
         big
       />
+      <div className="drag-handle flex items-center px-3 border-l border-border" title="Drag to move">
+        <GripVertical size={14} />
+      </div>
     </div>
   );
 }
@@ -151,7 +190,7 @@ function WatchlistPanel() {
   }
 
   return (
-    <Panel title="Watchlist" right={<span className="micro-label">{watchlist.length}</span>}>
+    <Panel title="Watchlist" right={<DragHandle><span className="micro-label">{watchlist.length}</span></DragHandle>}>
       {snapQ.loading && watchlist.length === 0 ? (
         <Spinner label="loading" />
       ) : watchlist.length === 0 ? (
@@ -193,41 +232,43 @@ function ChartPanel() {
     <Panel
       title={`Chart · ${symbol}`}
       right={
-        <div className="flex items-center gap-2">
+        <DragHandle>
           {price !== undefined && (
             <span className={`num text-sm ${colorBySign(chg)}`}>
               {money(price)} {chg !== undefined && <span className="text-2xs">{pct(chg)}</span>}
             </span>
           )}
           <Toggle value={tf} onChange={(v) => setTf(v as Timeframe)} options={TIMEFRAMES} />
-        </div>
+        </DragHandle>
       }
     >
-      <div className="flex items-center gap-1.5 px-3 py-1.5 border-b border-border">
-        {(['sma', 'ema', 'bbands', 'volume'] as (keyof Overlay)[]).map((k) => (
-          <button
-            key={k}
-            onClick={() => toggleOv(k)}
-            className={`px-2 py-0.5 text-2xs uppercase tracking-wider rounded border transition-colors ${
-              ov[k]
-                ? 'border-amber/40 text-amber bg-amber/10'
-                : 'border-border-2 text-muted hover:text-text'
-            }`}
-          >
-            {k === 'bbands' ? 'BB' : k}
-          </button>
-        ))}
-      </div>
-      <div className="p-1">
-        {barsQ.loading && bars.length === 0 ? (
-          <Spinner label="loading bars" />
-        ) : barsQ.error && bars.length === 0 ? (
-          <ErrorState label="No bar data" onRetry={barsQ.refetch} />
-        ) : bars.length === 0 ? (
-          <Empty label="No data" />
-        ) : (
-          <CandleChart bars={bars} overlays={ov} height={360} />
-        )}
+      <div className="flex flex-col h-full min-h-0">
+        <div className="flex items-center gap-1.5 px-3 py-1.5 border-b border-border shrink-0">
+          {(['sma', 'ema', 'bbands', 'volume'] as (keyof Overlay)[]).map((k) => (
+            <button
+              key={k}
+              onClick={() => toggleOv(k)}
+              className={`px-2 py-0.5 text-2xs uppercase tracking-wider rounded border transition-colors ${
+                ov[k]
+                  ? 'border-amber/40 text-amber bg-amber/10'
+                  : 'border-border-2 text-muted hover:text-text'
+              }`}
+            >
+              {k === 'bbands' ? 'BB' : k}
+            </button>
+          ))}
+        </div>
+        <div className="flex-1 min-h-0 p-1">
+          {barsQ.loading && bars.length === 0 ? (
+            <Spinner label="loading bars" />
+          ) : barsQ.error && bars.length === 0 ? (
+            <ErrorState label="No bar data" onRetry={barsQ.refetch} />
+          ) : bars.length === 0 ? (
+            <Empty label="No data" />
+          ) : (
+            <CandleChart bars={bars} overlays={ov} />
+          )}
+        </div>
       </div>
     </Panel>
   );
@@ -319,7 +360,11 @@ function ResearchFeed() {
   return (
     <Panel
       title="AI Research"
-      right={briefing && <span className="micro-label">{timeAgo(briefing.generated_at)}</span>}
+      right={
+        <DragHandle>
+          {briefing && <span className="micro-label">{timeAgo(briefing.generated_at)}</span>}
+        </DragHandle>
+      }
     >
       <div className="overflow-auto h-full p-2 space-y-2">
         {briefing && (
@@ -342,12 +387,14 @@ function ResearchFeed() {
 }
 
 /* ---------- Activity log ---------- */
+type ActivityRow =
+  | { kind: 'order'; id: string; ts: string; order: Order }
+  | { kind: 'risk'; id: string; ts: string; event: RiskEvent };
+
 function ActivityLog() {
   const ordersQ = usePolling<Order[]>(() => api.orders('all'), 6000);
-  const orders = (ordersQ.data ?? [])
-    .slice()
-    .sort((a, b) => +new Date(b.submitted_at) - +new Date(a.submitted_at))
-    .slice(0, 25);
+  // Only veto/warned risk events surface here — these must never be silent.
+  const riskQ = usePolling<RiskEvent[]>(() => api.riskEvents(50), 6000);
 
   const statusTone = (s: string): 'up' | 'down' | 'amber' | 'neutral' => {
     const v = s.toLowerCase();
@@ -357,69 +404,189 @@ function ActivityLog() {
     return 'neutral';
   };
 
+  const rows = useMemo<ActivityRow[]>(() => {
+    const orderRows: ActivityRow[] = (ordersQ.data ?? []).map((o) => ({
+      kind: 'order',
+      id: `o-${o.id}`,
+      ts: o.submitted_at,
+      order: o,
+    }));
+    const riskRows: ActivityRow[] = (riskQ.data ?? [])
+      .filter((e) => e.decision === 'vetoed' || e.decision === 'warned')
+      .map((e) => ({ kind: 'risk', id: `r-${e.id}`, ts: e.created_at, event: e }));
+    return [...orderRows, ...riskRows]
+      .sort((a, b) => +new Date(b.ts) - +new Date(a.ts))
+      .slice(0, 30);
+  }, [ordersQ.data, riskQ.data]);
+
+  const loading = ordersQ.loading && riskQ.loading && rows.length === 0;
+
   return (
     <Panel
       title="Activity Log"
       right={
-        <Link to="/trades" className="text-2xs uppercase tracking-wider text-amber hover:underline">
-          View ledger →
-        </Link>
+        <DragHandle>
+          <Link to="/trades" className="text-2xs uppercase tracking-wider text-amber hover:underline">
+            View ledger →
+          </Link>
+        </DragHandle>
       }
     >
-      {ordersQ.loading && orders.length === 0 ? (
+      {loading ? (
         <Spinner label="loading" />
-      ) : orders.length === 0 ? (
+      ) : rows.length === 0 ? (
         <Empty label="No recent activity" />
       ) : (
         <div className="overflow-auto h-full">
-          {orders.map((o) => (
-            <div key={o.id} className="flex items-center gap-2 px-3 h-8 data-row text-xs">
-              <span className="num text-muted w-12 shrink-0">{timeOnly(o.submitted_at)}</span>
-              <span
-                className={`uppercase font-medium w-9 ${
-                  o.side === 'buy' ? 'text-up' : 'text-down'
+          {rows.map((row) =>
+            row.kind === 'order' ? (
+              <div key={row.id} className="flex items-center gap-2 px-3 h-8 data-row text-xs">
+                <span className="num text-muted w-12 shrink-0">{timeOnly(row.order.submitted_at)}</span>
+                <span
+                  className={`uppercase font-medium w-9 ${
+                    row.order.side === 'buy' ? 'text-up' : 'text-down'
+                  }`}
+                >
+                  {row.order.side}
+                </span>
+                <span className="font-mono text-text w-14">{row.order.symbol}</span>
+                <span className="num text-text-dim w-10 text-right">{row.order.qty}</span>
+                <span className="text-muted uppercase text-2xs w-14">{row.order.type}</span>
+                <span className="ml-auto">
+                  <Badge tone={statusTone(row.order.status)}>{row.order.status}</Badge>
+                </span>
+              </div>
+            ) : (
+              <div
+                key={row.id}
+                className={`flex items-center gap-2 px-3 h-8 data-row text-xs ${
+                  row.event.decision === 'vetoed' ? 'bg-down/5' : 'bg-amber/5'
                 }`}
+                title={row.event.rules.map((r) => r.message).join(' · ')}
               >
-                {o.side}
-              </span>
-              <span className="font-mono text-text w-14">{o.symbol}</span>
-              <span className="num text-text-dim w-10 text-right">{o.qty}</span>
-              <span className="text-muted uppercase text-2xs w-14">{o.type}</span>
-              <span className="ml-auto">
-                <Badge tone={statusTone(o.status)}>{o.status}</Badge>
-              </span>
-            </div>
-          ))}
+                <span className="num text-muted w-12 shrink-0">{timeOnly(row.event.created_at)}</span>
+                <span
+                  className={`uppercase font-medium w-9 ${
+                    row.event.side === 'buy' ? 'text-up' : 'text-down'
+                  }`}
+                >
+                  {row.event.side}
+                </span>
+                <span className="font-mono text-text w-14">{row.event.symbol}</span>
+                <span className="num text-text-dim w-10 text-right">{row.event.qty}</span>
+                <span
+                  className={`truncate flex-1 text-2xs ${
+                    row.event.decision === 'vetoed' ? 'text-down' : 'text-amber'
+                  }`}
+                >
+                  {row.event.rules[0]?.message ?? 'risk'}
+                </span>
+                <span className="ml-auto">
+                  <Badge tone={row.event.decision === 'vetoed' ? 'down' : 'amber'}>
+                    {row.event.decision}
+                  </Badge>
+                </span>
+              </div>
+            ),
+          )}
         </div>
       )}
     </Panel>
   );
 }
 
-/* ---------- Dashboard ---------- */
+/* ---------- Draggable / resizable dashboard ---------- */
+
+const ResponsiveGridLayout = WidthProvider(Responsive);
+
+const LAYOUT_KEY = 'tt_dashboard_layout';
+const GRID_COLS = 12;
+const ROW_HEIGHT = 30;
+
+// 12-col grid. Strip full-width on top; chart large; AI feed tall on the right.
+const DEFAULT_LAYOUT: GridItem[] = [
+  { i: 'equity', x: 0, y: 0, w: 12, h: 2, minW: 4, minH: 2 },
+  { i: 'watchlist', x: 0, y: 2, w: 3, h: 12, minW: 2, minH: 4 },
+  { i: 'chart', x: 3, y: 2, w: 6, h: 16, minW: 3, minH: 6 },
+  { i: 'research', x: 9, y: 2, w: 3, h: 16, minW: 2, minH: 6 },
+  { i: 'activity', x: 0, y: 14, w: 3, h: 8, minW: 2, minH: 4 },
+  { i: 'bots', x: 3, y: 18, w: 9, h: 12, minW: 3, minH: 6 },
+];
+
+const TILES: { i: string; render: () => ReactNode }[] = [
+  { i: 'equity', render: () => <EquityStrip /> },
+  { i: 'watchlist', render: () => <WatchlistPanel /> },
+  { i: 'chart', render: () => <ChartPanel /> },
+  { i: 'research', render: () => <ResearchFeed /> },
+  { i: 'activity', render: () => <ActivityLog /> },
+  { i: 'bots', render: () => <BotSetup /> },
+];
+
+function loadLayout(): GridItem[] {
+  try {
+    const raw = localStorage.getItem(LAYOUT_KEY);
+    if (!raw) return DEFAULT_LAYOUT;
+    const parsed = JSON.parse(raw) as GridItem[];
+    if (!Array.isArray(parsed)) return DEFAULT_LAYOUT;
+    // Ensure every known tile is present (merge in any newly-added tiles).
+    const byId = new Map(parsed.map((l) => [l.i, l]));
+    return DEFAULT_LAYOUT.map((def) => byId.get(def.i) ?? def);
+  } catch {
+    return DEFAULT_LAYOUT;
+  }
+}
+
 export function Dashboard() {
+  const [layout, setLayout] = useState<GridItem[]>(() => loadLayout());
+
+  const onLayoutChange = (current: GridItem[]) => {
+    setLayout(current);
+    try {
+      localStorage.setItem(LAYOUT_KEY, JSON.stringify(current));
+    } catch {
+      /* storage may be unavailable (private mode) — ignore */
+    }
+  };
+
+  const resetLayout = () => {
+    setLayout(DEFAULT_LAYOUT);
+    try {
+      localStorage.removeItem(LAYOUT_KEY);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const layouts: GridLayouts = useMemo(
+    () => ({ lg: layout, md: layout, sm: layout }),
+    [layout],
+  );
+
   return (
-    <div className="flex flex-col gap-3 h-full min-h-0">
-      <EquityStrip />
-      <div className="grid grid-cols-12 gap-3 flex-1 min-h-0">
-        {/* Left: watchlist + activity */}
-        <div className="col-span-3 flex flex-col gap-3 min-h-0">
-          <div className="flex-1 min-h-0">
-            <WatchlistPanel />
-          </div>
-          <div className="h-64 shrink-0">
-            <ActivityLog />
-          </div>
-        </div>
-        {/* Center: chart */}
-        <div className="col-span-6 min-h-0">
-          <ChartPanel />
-        </div>
-        {/* Right: AI research */}
-        <div className="col-span-3 min-h-0">
-          <ResearchFeed />
-        </div>
+    <div className="h-full min-h-0 overflow-auto">
+      <div className="flex items-center justify-between px-1 pb-1">
+        <span className="micro-label">Dashboard — drag handles to move, edges to resize</span>
+        <button className="btn flex items-center gap-1" onClick={resetLayout}>
+          <RotateCcw size={12} /> Reset layout
+        </button>
       </div>
+      <ResponsiveGridLayout
+        className="layout"
+        layouts={layouts}
+        breakpoints={{ lg: 1200, md: 900, sm: 0 }}
+        cols={{ lg: GRID_COLS, md: GRID_COLS, sm: GRID_COLS }}
+        rowHeight={ROW_HEIGHT}
+        margin={[12, 12]}
+        containerPadding={[4, 4]}
+        draggableHandle=".drag-handle"
+        onLayoutChange={onLayoutChange}
+        compactType="vertical"
+        resizeHandles={['se']}
+      >
+        {TILES.map((t) => (
+          <div key={t.i}>{t.render()}</div>
+        ))}
+      </ResponsiveGridLayout>
     </div>
   );
 }
