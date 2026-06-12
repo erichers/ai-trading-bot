@@ -114,7 +114,9 @@ fn validate_sql(sql: &str) -> Result<String, String> {
     Ok(cleaned)
 }
 
-const CLASSIFY_SYSTEM: &str = "You are a careful data analyst for a trading-terminal app. You answer with a single STRICT JSON object only. Decide if the user's question can be answered by querying the app's database. If yes, set mode='sql' and write ONE read-only MySQL SELECT (no semicolons, no writes) using ONLY the given tables/columns. If it's a general question about markets or the app, set mode='chat' and leave sql empty. JSON keys: mode ('sql'|'chat'), sql (string), reason (string).";
+fn classify_system(dialect: &str) -> String {
+    format!("You are a careful data analyst for a trading-terminal app. You answer with a single STRICT JSON object only. Decide if the user's question can be answered by querying the app's database. If yes, set mode='sql' and write ONE read-only {dialect} SELECT (no semicolons, no writes) using ONLY the given tables/columns and standard SQL functions. If it's a general question about markets or the app, set mode='chat' and leave sql empty. JSON keys: mode ('sql'|'chat'), sql (string), reason (string).")
+}
 
 async fn app_context(state: &AppState) -> String {
     let (acct, pos) = match (state.alpaca.get_account().await, state.alpaca.get_positions().await) {
@@ -202,12 +204,14 @@ pub async fn ask(state: &AppState, message: &str, history: &[Value]) -> Value {
     if message.is_empty() {
         return json!({"answer": "Ask me about your trades, research, or how the app works.", "mode": "chat"});
     }
+    let dialect = if state.pool.is_sqlite() { "SQLite" } else { "MySQL" };
     let classify_user = format!(
-        "Database schema (MySQL):\n{}\n\nUser question: {}\n\nRespond with STRICT JSON: {{mode, sql, reason}}.",
+        "Database schema ({}):\n{}\n\nUser question: {}\n\nRespond with STRICT JSON: {{mode, sql, reason}}.",
+        dialect,
         schema_text(),
         message
     );
-    let plan = match state.llm.ollama_chat(CLASSIFY_SYSTEM, &classify_user, true, 400).await {
+    let plan = match state.llm.ollama_chat(&classify_system(dialect), &classify_user, true, 400).await {
         Ok(raw) => parse_json_loose(&raw).unwrap_or(json!({"mode": "chat"})),
         Err(_) => json!({"mode": "chat"}),
     };

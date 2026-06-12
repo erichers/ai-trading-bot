@@ -26,6 +26,11 @@ pub struct Settings {
     pub db_user: String,
     pub db_password: String,
     pub db_name: String,
+
+    /// "mysql" (default, web version) | "sqlite" (native app).
+    pub db_backend: String,
+    /// SQLite file path (used only when db_backend == "sqlite").
+    pub sqlite_path: String,
 }
 
 fn ev(key: &str, default: &str) -> String {
@@ -71,7 +76,14 @@ impl Settings {
             db_user: ev("DB_USER", "root"),
             db_password: ev("DB_PASSWORD", "root"),
             db_name: ev("DB_NAME", "trading_terminal"),
+
+            db_backend: ev("DB_BACKEND", "mysql").to_lowercase(),
+            sqlite_path: ev("SQLITE_PATH", "trading_terminal.db"),
         }
+    }
+
+    pub fn use_sqlite(&self) -> bool {
+        self.db_backend == "sqlite"
     }
 
     pub fn alpaca_configured(&self) -> bool {

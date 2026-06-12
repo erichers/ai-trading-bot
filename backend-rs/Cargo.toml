@@ -3,6 +3,10 @@ name = "trading-backend-rs"
 version = "1.0.0"
 edition = "2021"
 
+[lib]
+name = "trading_backend_rs"
+path = "src/lib.rs"
+
 [[bin]]
 name = "trading-backend-rs"
 path = "src/main.rs"
@@ -14,7 +18,7 @@ tower-http = { version = "0.5", features = ["cors", "trace"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "mysql", "chrono", "json", "macros"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "mysql", "sqlite", "chrono", "json", "macros"] }
 chrono = { version = "0.4", features = ["serde"] }
 dotenvy = "0.15"
 tracing = "0.1"

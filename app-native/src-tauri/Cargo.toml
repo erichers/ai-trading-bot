@@ -1,0 +1,27 @@
+[package]
+name = "ai-trading-terminal"
+version = "1.0.0"
+description = "AI Trading Terminal — native macOS app"
+edition = "2021"
+
+[lib]
+name = "ai_trading_terminal_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tokio = { version = "1", features = ["full"] }
+anyhow = "1"
+dotenvy = "0.15"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+trading-backend-rs = { path = "../../backend-rs" }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

@@ -23,3 +23,17 @@ dist/
 
 # TS build info
 *.tsbuildinfo
+
+# Rust / Cargo build artifacts
+target/
+backend-rs/target/
+app-native/src-tauri/target/
+
+# Tauri / native app bundles (huge — never commit)
+**/*.app
+**/*.dmg
+app-native/src-tauri/gen/
+
+# The Tauri placeholder splash dist is source, not a build artifact — keep it.
+!app-native/dist/
+!app-native/dist/index.html
