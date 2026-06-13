@@ -16,6 +16,7 @@ pub mod research;
 pub mod risk;
 pub mod signals;
 pub mod state;
+pub mod sync;
 pub mod worker;
 
 use axum::extract::{Path, Query, State, WebSocketUpgrade};
@@ -159,7 +160,10 @@ pub fn build_app(app_state: AppState) -> Router {
         // chat
         .route("/chat", post(chat_post))
         .route("/chat/schema", get(chat_schema))
-        .route("/chat/history", get(chat_history));
+        .route("/chat/history", get(chat_history))
+        // sync (SQLite <-> MySQL; native app only)
+        .route("/sync", post(sync_now))
+        .route("/sync/status", get(sync_status));
 
     Router::new()
         .nest("/api", api)
@@ -183,6 +187,12 @@ pub async fn run(settings: Option<Arc<Settings>>, port: Option<u16>) -> anyhow::
     // Background research worker.
     worker::start(app_state.clone());
 
+    // SQLite <-> MySQL sync: only the native app (DB_BACKEND=sqlite) syncs.
+    // The MySQL web binary must NOT run this (it IS the source of truth).
+    if app_state.pool.is_sqlite() {
+        start_sync(app_state.clone());
+    }
+
     let app = build_app(app_state);
 
     let port: u16 = port
@@ -192,6 +202,34 @@ pub async fn run(settings: Option<Arc<Settings>>, port: Option<u16>) -> anyhow::
     tracing::info!("AI Trading Terminal (Rust, self-contained) listening on http://localhost:{port}");
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+/// Start the native-app sync loop: an immediate startup pull (MySQL->SQLite so the
+/// app shows the worker's accumulated research) followed by a periodic merge every
+/// ~120s. Gated by the caller to DB_BACKEND=sqlite. Never blocks startup: if MySQL
+/// is down, each cycle logs and skips.
+pub fn start_sync(state: AppState) {
+    tokio::spawn(async move {
+        // Startup pull (and push) once, immediately.
+        match sync::sync(&state.pool, &state.settings).await {
+            Ok(v) => tracing::info!(
+                "startup sync: pulled {} pushed {} (mysql_reachable={})",
+                v["pulled"].as_i64().unwrap_or(0),
+                v["pushed"].as_i64().unwrap_or(0),
+                v["mysql_reachable"].as_bool().unwrap_or(false),
+            ),
+            Err(e) => tracing::warn!("startup sync failed: {e:#}"),
+        }
+        // Periodic merge.
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(120));
+        tick.tick().await; // consume the immediate first tick
+        loop {
+            tick.tick().await;
+            if let Err(e) = sync::sync(&state.pool, &state.settings).await {
+                tracing::warn!("periodic sync failed: {e:#}");
+            }
+        }
+    });
 }
 
 // ---- helpers ----------------------------------------------------------------
@@ -826,6 +864,20 @@ async fn chat_post(State(s): State<AppState>, Json(body): Json<Value>) -> Json<V
     let _ = db::insert_chat_message(&s.pool, "user", message, &json!({})).await;
     let _ = db::insert_chat_message(&s.pool, "assistant", result["answer"].as_str().unwrap_or(""), &json!({"mode": result["mode"], "sql": result["sql"]})).await;
     Json(result)
+}
+
+// ---- sync (SQLite <-> MySQL) ------------------------------------------------
+/// Manually trigger a bidirectional sync. Returns {pulled, pushed, ...}.
+async fn sync_now(State(s): State<AppState>) -> Json<Value> {
+    match sync::sync(&s.pool, &s.settings).await {
+        Ok(v) => Json(v),
+        Err(e) => Json(json!({ "error": e.to_string(), "pulled": 0, "pushed": 0 })),
+    }
+}
+
+/// Sync status: last sync info, mysql reachability, current SQLite counts.
+async fn sync_status(State(s): State<AppState>) -> Json<Value> {
+    Json(sync::status(&s.pool, &s.settings).await)
 }
 
 // ---- websocket --------------------------------------------------------------

@@ -1,142 +1,165 @@
-# AI Trading Bot
+# AI Trading Terminal
 
-An AI-assisted, **paper-first** algorithmic trading platform: a deterministic strategy + risk engine, a Claude-powered market analyst for news/sentiment/regime interpretation, and a React dashboard for steering it all. Built on [Alpaca](https://alpaca.markets) for commission-free US equities/ETFs/options/crypto.
+A Bloomberg-style, **paper-first** algorithmic trading terminal: a deterministic strategy + risk engine, AI market research, real-time charts, weekly options flow & contract selection, a natural-language **chat over your own database**, and a guided bot builder. Built on [Alpaca](https://alpaca.markets) for commission-free US equities/ETFs/options.
 
-> ⚠️ **Educational project — not investment advice.** Automated trading can lose money rapidly. Backtest and paper results do not guarantee live performance. Trade live only with capital you can afford to lose.
+It ships in **two forms from one codebase**:
+1. 🖥️ **Native macOS app** — a self-contained `.app` with an **embedded SQLite** database (no external DB needed).
+2. 🌐 **Web app** — a single Rust binary that serves the whole UI on `http://localhost:8001`, backed by **MySQL**.
+
+The two stay in sync automatically (SQLite ↔ MySQL).
+
+> ⚠️ **Educational project — not financial advice.** Automated trading can lose money rapidly. Paper/backtest results don't guarantee live performance. The AI can be confidently wrong — that's why a deterministic risk engine has veto power over every order. Trade live only with money you can afford to lose.
 
 ---
 
 ## Core principle
 
-**The LLM proposes; deterministic code disposes.**
+**The LLM proposes; deterministic code disposes.** AI generates theses and signals, but a rule-based **risk engine validates every order** against hard limits before anything reaches the broker. AI is used for *information processing* (news/sentiment/regime), never as the last line of defense.
 
-Claude generates trade theses and signals, but a rule-based **risk engine validates every order** against hard-coded limits before anything touches the broker. LLMs add value in *information processing* (news, earnings, sentiment, regime) — not millisecond execution. This system targets swing/intraday horizons (minutes to hours), never HFT, and ships paper-first.
+---
+
+## Features
+
+- **Dashboard** — draggable/resizable tiles (lock/Arrange toggle, responsive autofit): equity + **open risk**, live watchlist, candlestick chart with indicator overlays, AI research feed, activity log, bot setup.
+- **Builder** — a guided wizard: pick ticker → entry trigger (e.g. *RSI crosses above 32 on 5m*) → action (**buy calls/puts**, pick the exact contract from the **live options chain** at ATM/OTM/ITM) → sizing/risk/mode → save.
+- **Options Flow** — real Alpaca chains, weekly/daily, greeks/IV, put/call ratio, unusual-activity detection.
+- **Research** — **Kimi** (cloud) on-demand deep dives + a **free local Gemma** worker researching MAG7 (TSLA/META/NVDA focus) **24/7**, with earnings notes; all persisted and browsable.
+- **Chat (Vanna-style)** — ask questions in plain English; a local model writes **read-only SQL**, runs it on your DB, and answers — plus questions about the app itself.
+- **Risk** — position sizing, max position/concentration, daily-loss circuit breaker, per-trade R, kill switch; every veto is logged.
+- **Trades / Positions / News / Settings / Onboarding / Help**.
 
 ---
 
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│                     WEB DASHBOARD (React)                      │
-│   Steering Console │ Charts │ Positions │ AI Research Feed     │
-└─────────────▲──────────────────────────────▲─────────────────┘
-              │ REST (FastAPI)               │ WebSocket (live push)
-┌─────────────┴──────────────────────────────┴─────────────────┐
-│                       BACKEND (Python)                        │
-│   Strategy Engine ─▶ AI Analyst (Claude) ─▶ Risk Engine ─▶    │
-│   Execution Manager   │  Market Data Service │ News Service    │
-│   PostgreSQL + TimescaleDB · Redis                            │
-└──────────────────────────────────┼───────────────────────────┘
-                                    ▼
-                   ┌────────────────────────────────┐
-                   │ ALPACA API (paper → live)       │
-                   │ Trading + Data + News WebSocket │
-                   └────────────────────────────────┘
+            ┌──────────────────────────────────────────────┐
+            │   React + TypeScript + Vite frontend (SPA)    │
+            │   embedded into the Rust binary at build time │
+            └───────────────┬──────────────────────────────┘
+                            │  /api (REST)  +  /ws (WebSocket)
+            ┌───────────────▼──────────────────────────────┐
+            │        Rust / axum backend (backend-rs)       │
+            │  strategy · risk engine · options · bots ·    │
+            │  research · Vanna chat · 24/7 worker · sync   │
+            └───┬───────────────┬───────────────┬───────────┘
+                │               │               │
+         ┌──────▼─────┐  ┌──────▼──────┐  ┌─────▼──────┐
+         │  Alpaca    │  │  Kimi /     │  │ MySQL  or  │
+         │ (paper)    │  │  Ollama     │  │ SQLite     │
+         │ trading +  │  │ (Gemma)     │  │ (auto-     │
+         │ data + opt │  │ research+   │  │  synced)   │
+         │ + news     │  │ chat        │  │            │
+         └────────────┘  └─────────────┘  └────────────┘
 ```
 
-### Components
-
-| Component | Responsibility |
-|---|---|
-| **Market Data Service** | Holds the Alpaca WebSocket, subscribes to bars/quotes/trades, computes rolling indicators, persists bars to TimescaleDB, republishes to the frontend. Auto-reconnect with backoff + REST gap-fill. |
-| **Strategy Engine** | Evaluates composable trigger rules each bar close (1m/5m/15m/1h/1d) over an indicator library (SMA/EMA, RSI, MACD, Bollinger, ATR, VWAP, Stochastic, ADX, OBV). Emits a **signal, not an order**. |
-| **AI Analyst (local Gemma)** | On signals/schedule/demand: bars + indicators + Alpaca news → structured JSON `{thesis, sentiment, conviction, key_risks, suggested_action/stop/target, regime, bear_case}` from `gemma4:e2b` via Ollama (no cloud key). Every analysis is persisted to MySQL and auditable. |
-| **Risk Engine** | Pure deterministic veto layer: max position size, max open positions, daily-loss circuit breaker, per-trade risk (R), concentration limits, time windows, PDT awareness, kill switch. Sizing: `qty = (equity × risk%) / (entry − stop)`. |
-| **Execution Manager** | Default **bracket orders** (entry + take-profit + stop-loss, atomic). Trailing-stop exits via the `trade_updates` fill-listener workaround. Handles partial fills, rejections, breakeven moves, EOD flatten. |
-
-### Trading modes
-
-- **Signal-only** — alerts, no orders.
-- **Semi-auto** — AI proposes, you approve each trade with one tap.
-- **Full-auto** — the risk engine is the only gate.
-
-Paper/live is a global, prominently displayed switch. Live mode requires re-authentication and shows a persistent red banner.
+The native macOS app wraps this same backend in a Tauri window using **SQLite**; the web build uses **MySQL**.
 
 ---
 
-## Tech stack
+## Prerequisites
 
-- **Backend:** Python 3.12, FastAPI, `alpaca-py`, SQLAlchemy 2.0, asyncio
-- **Database:** MySQL 8 (via MAMP) — trades ledger, research, signals, config
-- **AI:** local **Gemma (`gemma4:e2b`) via Ollama** by default; Anthropic API optional
-- **Frontend:** React + TypeScript + Vite, Tailwind, shadcn/ui
-- **Charts:** TradingView Lightweight Charts
-- **Backtesting:** vectorbt / backtrader on Alpaca historical bars
-- **Deploy:** Docker Compose → VPS / Fly.io / Railway
+| Need | For | Install |
+|---|---|---|
+| **Alpaca paper account + API keys** | trading & market data | https://app.alpaca.markets (free) |
+| **Rust** (stable) | the backend / native app | https://rustup.rs |
+| **Node.js 20+** | building the frontend | https://nodejs.org |
+| **Ollama** + `gemma4:e2b` | free local AI (worker + chat) | https://ollama.com → `ollama pull gemma4:e2b` |
+| **MySQL** (e.g. [MAMP](https://www.mamp.info)) | the **web** build & cross-sync | MAMP defaults: `127.0.0.1:8889`, `root`/`root` |
+| **Kimi key** *(optional)* | best on-demand research | https://platform.kimi.ai — omit to use free Gemma only |
+| **Tauri CLI** *(for the .app)* | building the macOS app | `cargo install tauri-cli` or `npm i -g @tauri-apps/cli` |
+
+> The **native macOS app needs no MySQL** (it uses embedded SQLite). MySQL is only required for the web build and for cross-device sync.
 
 ---
 
-## The app
+## Quick start
 
-A full Bloomberg-style trading terminal lives in this repo:
-
-- **`backend/`** — FastAPI + `alpaca-py` (live paper trading & market data), pure-pandas indicators, Anthropic-powered AI research, SQLite persistence, and a `/ws` realtime feed. ~30 endpoints under `/api`.
-- **`frontend/`** — React + TypeScript + Vite + Tailwind dark terminal UI with 9 views: **Dashboard, Tickers, Options Flow (weekly/daily), Strategies (indicators-to-fire), Research, News, Positions & Orders, Settings, Help** — TradingView charts, live watchlist with tick flashes, function bar with command search + **KILL SWITCH**.
-
-### Prerequisites
-- Python 3.11+ (3.12 recommended), Node 20+
-- A free [Alpaca paper trading account](https://app.alpaca.markets) and API keys
-- *(Optional)* an [Anthropic API key](https://console.anthropic.com) — AI research serves structured mock data without one
-
-### Local infrastructure
-
-This deployment runs entirely on local infra — no cloud AI key required:
-
-- **MySQL via MAMP** (`127.0.0.1:8889`, db `trading_terminal`) — persists **all trades**, research analyses, signals, briefings, strategies, watchlist. Start MAMP, or `/Applications/MAMP/bin/startMysql.sh`.
-- **Local AI research via Ollama** — model **`gemma4:e2b`** at `localhost:11434`. `ollama serve && ollama pull gemma4:e2b`.
-- **Alpaca** paper trading + market data + **real options chains** (entitlement enabled).
-
-### Run it — two modes
-
-**Dev (hot reload):**
 ```bash
-cp .env.example .env        # add your Alpaca paper keys
-./dev.sh                    # backend :8000 + Vite :5173 → http://localhost:5173
+git clone https://github.com/erichers/ai-trading-bot.git
+cd ai-trading-bot
+
+# 1) Configure secrets (never committed)
+cp .env.example .env
+#    → edit .env: add your ALPACA_API_KEY / ALPACA_SECRET_KEY (required)
+#      and optionally KIMI_API_KEY (else research runs on free local Gemma)
+
+# 2) Local AI (free)
+ollama pull gemma4:e2b      # and make sure `ollama serve` is running
+
+# 3a) WEB build (needs MySQL running — e.g. start MAMP):
+./run-native.sh            # builds the frontend + Rust release, serves http://localhost:8001
+                           # (creates the `trading_terminal` MySQL db if missing)
+
+# 3b) NATIVE macOS app (embedded SQLite, no MySQL needed):
+cd frontend && npm run build && cd ..
+cd app-native/src-tauri && cargo tauri build --bundles app
+open "target/release/bundle/macos/AI Trading Terminal.app"
 ```
 
-**Served under MAMP/Apache at `/sandbox/` (production-style):**
-```bash
-# one-time: append the Apache vhost block, then restart MAMP's Apache
-cat deploy/apache-sandbox.conf >> /Applications/MAMP/conf/apache/httpd.conf
-
-./serve.sh                  # builds the SPA + runs Ollama/MySQL/backend
-# → open http://localhost:8888/sandbox/
-```
-Apache serves the built SPA from `frontend/dist` and reverse-proxies `/sandbox/api` and `/sandbox/ws` to the FastAPI backend on :8000 (same-origin, websockets via `mod_proxy_wstunnel`).
-
-The app **defaults to paper mode** and degrades gracefully: every external call falls back to realistic mock data, so the UI never crashes when a feed or key is missing.
-
-The Alpaca paper endpoint is `https://paper-api.alpaca.markets/v2`. Use the `FAKEPACA` test symbol to validate the data pipeline before market hours.
-
-### Optional: Alpaca MCP server
-
-The official [Alpaca MCP server](https://github.com/alpacahq/alpaca-mcp-server) exposes 65 trading/market-data tools to Claude Code. It **defaults to paper** and only goes live when `ALPACA_PAPER_TRADE=false` is set with live keys.
+That's it — open `http://localhost:8001` (web) or the `.app` (native).
 
 ---
 
-## Roadmap
+## Running each form
 
-- [x] **Phase 0 — Setup:** paper account, repo scaffold, Docker (Postgres/Timescale + Redis), stream `FAKEPACA` to a chart.
-- [ ] **Phase 1 — Data & charts:** historical ingest, indicator service, watchlist, chart overlays, WS fanout.
-- [ ] **Phase 2 — Strategy engine + manual trading:** JSON rule schema + evaluator, signals, bracket-order ticket, positions/orders views.
-- [ ] **Phase 3 — Risk engine + automation:** limits, circuit breakers, kill switch, sizing, trailing-stop-on-fill, full-auto (paper).
-- [ ] **Phase 4 — AI analyst:** Claude structured outputs, news ingest, morning briefing, deep-dive, bull/bear pass, NL→rule translation.
-- [ ] **Phase 5 — Backtesting + hardening:** backtest module, walk-forward, chaos testing, audit export, alerting.
-- [ ] **Phase 6 — Live gate:** ≥30 paper trading days with positive expectancy → live at 1–5% size, semi-auto, scale gradually.
+### 🌐 Web app (Rust + MySQL)
+- One command: **`./run-native.sh`** — ensures Ollama + MySQL, builds, runs on **http://localhost:8001**.
+- Manual: `cd frontend && npm run build` then `cd backend-rs && cargo run --release` (defaults to `DB_BACKEND=mysql`).
+- Dev with hot reload: `cd frontend && npm run dev` (Vite on :5173, proxies to the backend on :8001).
+
+### 🖥️ Native macOS app (Tauri + embedded SQLite)
+- Build: `cd app-native/src-tauri && cargo tauri build --bundles app` (build `frontend/` first so the embedded UI is current).
+- The app stores its database at `~/Library/Application Support/com.orcounselors.tradingterminal/trading_terminal.db`.
+- **Unsigned build:** on first launch macOS Gatekeeper may block it — **right-click → Open** (or `xattr -dr com.apple.quarantine "<app>"`).
+
+### 🚀 Desktop launcher (one-click everything)
+`Trading Terminal.app` on the Desktop (compiled from `app-native/launcher/launcher.applescript`):
+- **On open:** starts Ollama (if down) + MySQL (if down), then launches the app.
+- **On close:** stops MySQL it started (after a final sync) but **leaves Ollama running** so Gemma stays available in the background.
+
+---
+
+## Data & sync
+
+- **Web** → MySQL `trading_terminal`. **Native app** → embedded SQLite. Identical schema (trades, research, deep research, signals, risk events, bots, strategies, watchlist, settings…).
+- **Auto-sync** (native app only): pulls MySQL→SQLite on launch, syncs every ~2 min, pushes SQLite→MySQL on quit — bidirectional merge with dedup. If MySQL is unreachable it simply skips. Manual trigger: `POST /api/sync`; status: `GET /api/sync/status`.
+
+---
+
+## Project structure
+
+```
+backend-rs/     Rust/axum backend (primary) — lib + binary; MySQL & SQLite; sync; embedded SPA
+app-native/     Tauri macOS app (embedded SQLite) + Desktop launcher (AppleScript)
+frontend/       React + TS + Vite SPA (built into the backend binary)
+backend/        Original Python/FastAPI implementation (reference / alternative)
+deploy/         Optional Apache vhost (legacy /sandbox serving)
+run-native.sh   One-command web launcher
+.env.example    Copy to .env and fill in your keys
+```
 
 ---
 
 ## Security
 
-- **Secrets are server-side only**, in a gitignored `.env` (see `.env.example`). They are never committed and never pasted into any AI chat context.
-- Keep **live** keys out of MCP/AI tool contexts; the system stays in paper mode (`ALPACA_PAPER_TRADE=true`) until the live gate.
-- Every order is audit-logged with its originating signal and AI analysis.
+- **Secrets live only in `.env`** (gitignored, never committed). The app reads them at runtime — they are **not** bundled into the binary or the `.app`. For a portable install, place credentials in `~/.config/trading-terminal/.env`.
+- Verified: no API keys or secrets exist anywhere in the tracked files or git history.
+- Stays in **paper mode** (`ALPACA_PAPER_TRADE=true`) until you deliberately switch to live keys.
+- The chat's text-to-SQL is **read-only** (SELECT-only, validated, auto-LIMIT).
 
-## Disclaimer
+---
 
-This software is provided for educational purposes only and does not constitute financial, investment, or trading advice. Stops and conditional orders are best-effort and can fail near market close or during outages. You are solely responsible for any trading decisions and losses. Use at your own risk.
+## Troubleshooting
 
-## License
+- **Blank page** → a backend isn't running, or (web build via Apache) Apache stopped. Start the backend; the binary prints its URL. Boot errors now render on-page instead of a white screen.
+- **Research returns nothing / falls back to Gemma** → check `KIMI_API_KEY`; Kimi reasoning models take ~60–90s (there's a spinner). Free Gemma always works if Ollama is running.
+- **Chat / worker errors** → ensure `ollama serve` is up and `gemma4:e2b` is pulled.
+- **Native app won't open** → unsigned build; right-click → Open once.
+- **Sync does nothing** → MySQL isn't reachable; start MAMP. Sync is best-effort and never blocks the app.
 
-MIT
+---
+
+## License & disclaimer
+
+MIT. Provided for educational purposes only; not financial, investment, or trading advice. Stops and conditional orders are best-effort and can fail near the close or during outages. You are solely responsible for any trading decisions and losses.

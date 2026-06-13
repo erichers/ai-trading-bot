@@ -4,7 +4,60 @@
 
 use std::net::TcpListener;
 use std::sync::Arc;
-use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+use std::sync::Mutex;
+use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
+
+/// The native app's SQLite path, captured at setup so the exit hook can flush a
+/// final SQLite->MySQL sync without depending on the (possibly torn-down) HTTP
+/// server still listening.
+static SQLITE_PATH: Mutex<Option<String>> = Mutex::new(None);
+
+/// On app exit, push any locally-created rows to MySQL (best effort, capped).
+/// The backend also syncs on a 120s timer; this guarantees the last writes are
+/// flushed before the launcher stops MySQL. Runs sync directly against a fresh
+/// SQLite pool (not via HTTP) so it works even as the server shuts down.
+fn final_sync_push() {
+    let path = match SQLITE_PATH.lock().unwrap().clone() {
+        Some(p) => p,
+        None => {
+            tracing::warn!("final_sync_push: no sqlite path recorded — skipping");
+            return;
+        }
+    };
+    tracing::info!("final_sync_push: flushing {path}");
+    // Run on a dedicated thread + runtime, capped so we never hang the quit.
+    let _ = std::thread::spawn(move || {
+        let rt = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(rt) => rt,
+            Err(_) => return,
+        };
+        rt.block_on(async move {
+            let fut = async {
+                let settings = Arc::new(trading_backend_rs::config::Settings::load());
+                match trading_backend_rs::db::connect_sqlite(&path).await {
+                    Ok(sq) => {
+                        let db = trading_backend_rs::database::Db::Sq(sq);
+                        match trading_backend_rs::sync::sync(&db, &settings).await {
+                            Ok(v) => tracing::info!(
+                                "shutdown sync push: pushed {} pulled {}",
+                                v["pushed"].as_i64().unwrap_or(0),
+                                v["pulled"].as_i64().unwrap_or(0)
+                            ),
+                            Err(e) => tracing::warn!("shutdown sync failed: {e:#}"),
+                        }
+                    }
+                    Err(e) => tracing::warn!("shutdown sync: cannot open sqlite: {e:#}"),
+                }
+            };
+            // Hard cap so the app never hangs on quit (e.g. MySQL probe slow).
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(10), fut).await;
+        });
+    })
+    .join();
+}
 
 /// Find a free localhost TCP port by binding to :0 and reading the assigned port.
 fn free_port() -> u16 {
@@ -90,6 +143,9 @@ pub fn run() {
             std::env::set_var("DB_BACKEND", "sqlite");
             std::env::set_var("SQLITE_PATH", sqlite_path.to_string_lossy().to_string());
 
+            // Remember the SQLite path so the exit hook can flush a final sync.
+            *SQLITE_PATH.lock().unwrap() = Some(sqlite_path.to_string_lossy().to_string());
+
             let port = free_port();
             tracing::info!(
                 "Native app: SQLite at {}, backend port {}",
@@ -142,6 +198,23 @@ pub fn run() {
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app_handle, event| {
+            // On exit, flush a final SQLite->MySQL sync push (best effort).
+            // ExitRequested fires on Cmd-Q / app quit; we run sync synchronously
+            // here BEFORE the process tears down (it opens its own SQLite pool, so
+            // it does not depend on the HTTP server still listening).
+            match event {
+                RunEvent::ExitRequested { .. } => {
+                    tracing::info!("ExitRequested — running final sync push");
+                    final_sync_push();
+                }
+                RunEvent::Exit => {
+                    tracing::info!("Exit — running final sync push");
+                    final_sync_push();
+                }
+                _ => {}
+            }
+        });
 }
