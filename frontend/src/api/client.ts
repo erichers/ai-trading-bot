@@ -8,6 +8,7 @@ import type {
   BotFromPromptResponse,
   PortfolioHistory,
   BotStatus,
+  BotWorkerStatus,
   Briefing,
   ChatHistoryMessage,
   ChatMessageTurn,
@@ -249,6 +250,11 @@ export const api = {
     }).then(normalizeEval),
   // Live status: last evaluation, mode, enabled. Degrades on 404/503.
   botStatus: (id: string) => request<BotStatus>(`/bots/${id}/status`),
+  // Autonomous bot scheduler (background runner).
+  botWorker: () => request<BotWorkerStatus>('/bots/worker'),
+  botWorkerUpdate: (cfg: { enabled?: boolean; interval_sec?: number }) =>
+    request<BotWorkerStatus>('/bots/worker', { method: 'PUT', body: JSON.stringify(cfg) }),
+  botWorkerRunOnce: () => request<BotWorkerStatus>('/bots/worker/run-once', { method: 'POST' }),
   // "Build with AI" (Kimi): describe a strategy → draft Bot config + explanation.
   botFromPrompt: (prompt: string, symbol?: string) =>
     request<BotFromPromptResponse>('/bots/from-prompt', {

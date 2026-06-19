@@ -5,6 +5,7 @@
 pub mod alpaca;
 pub mod backtest;
 pub mod bots;
+pub mod botworker;
 pub mod chat;
 pub mod config;
 pub mod database;
@@ -152,6 +153,8 @@ pub fn build_app(app_state: AppState) -> Router {
         .route("/bots/:id/run", post(run_bot))
         .route("/bots/:id/status", get(bot_status))
         .route("/bots/from-prompt", post(bot_from_prompt))
+        .route("/bots/worker", get(bot_worker_status).put(bot_worker_update))
+        .route("/bots/worker/run-once", post(bot_worker_run_once))
         // backtest
         .route("/backtest", post(backtest_run))
         // research
@@ -197,6 +200,7 @@ pub async fn run(settings: Option<Arc<Settings>>, port: Option<u16>) -> anyhow::
 
     // Background research worker.
     worker::start(app_state.clone());
+    botworker::start(app_state.clone());
 
     // RAG knowledge index: index on startup + refresh every ~5 min (non-blocking).
     rag::start(app_state.clone());
@@ -959,6 +963,18 @@ async fn worker_update(State(s): State<AppState>, Json(body): Json<Value>) -> Js
 }
 async fn worker_run_once(State(s): State<AppState>) -> Json<Value> {
     Json(worker::run_once(&s).await)
+}
+
+// ---- bot scheduler (autonomous runner) --------------------------------------
+async fn bot_worker_status(State(s): State<AppState>) -> Json<Value> {
+    Json(botworker::status(&s).await)
+}
+async fn bot_worker_update(State(s): State<AppState>, Json(body): Json<Value>) -> Json<Value> {
+    botworker::set_config(&s, &body).await;
+    Json(botworker::status(&s).await)
+}
+async fn bot_worker_run_once(State(s): State<AppState>) -> Json<Value> {
+    Json(botworker::run_once(&s).await)
 }
 
 // ---- chat -------------------------------------------------------------------

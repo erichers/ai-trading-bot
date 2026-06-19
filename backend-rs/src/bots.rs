@@ -675,6 +675,15 @@ pub async fn run_bot(state: &AppState, bot: &Value, place: bool) -> Value {
     let mut place_notes: Vec<String> = vec![];
     let empty = vec![];
 
+    // Failsafe gates that apply to EVERY placement (manual UI run or autonomous
+    // scheduler) — run_bot places directly, so the master switch / kill switch /
+    // daily entry cap must be enforced here too, not only in create_order.
+    let limits = db::get_risk_limits(&state.pool).await.unwrap_or_else(|_| db::default_limits());
+    let trading_enabled = limits["trading_enabled"].as_bool().unwrap_or(true);
+    let kill = limits["kill_switch_engaged"].as_bool().unwrap_or(false);
+    let order_cap = limits["max_orders_per_day"].as_i64().unwrap_or(0);
+    let mut orders_today = db::count_trades_today(&state.pool).await.unwrap_or(0);
+
     for p in evaluation["proposals"].as_array().unwrap_or(&empty) {
         if !p["firing"].as_bool().unwrap_or(false) {
             continue;
@@ -702,6 +711,20 @@ pub async fn run_bot(state: &AppState, bot: &Value, place: bool) -> Value {
             place_notes.push(format!("{}: place=false → not submitted.", p["symbol"].as_str().unwrap_or("?")));
             continue;
         }
+        let sym = p["symbol"].as_str().unwrap_or("?");
+        // --- failsafes ---
+        if kill || !trading_enabled {
+            place_notes.push(format!(
+                "{}: blocked — {} failsafe active.",
+                sym,
+                if kill { "kill-switch" } else { "trading-disabled" }
+            ));
+            continue;
+        }
+        if order_cap > 0 && orders_today >= order_cap {
+            place_notes.push(format!("{}: daily order cap reached ({}/{}).", sym, orders_today, order_cap));
+            continue;
+        }
         // mode is semi/auto AND place=true AND firing (already risk-approved).
         let order = json!({
             "symbol": p["occ_symbol"], "asset_class": "option", "side": "buy",
@@ -720,6 +743,7 @@ pub async fn run_bot(state: &AppState, bot: &Value, place: bool) -> Value {
                     "decision": p["risk"]["decision"], "rules": p["risk"]["warnings"],
                     "computed": p["risk"]["computed"], "source": "bot",
                 })).await;
+                orders_today += 1;
                 place_notes.push(format!("{}: order submitted ({}).", p["symbol"].as_str().unwrap_or("?"), ack["status"].as_str().unwrap_or("?")));
                 placed.push(ack);
             }

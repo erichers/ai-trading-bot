@@ -791,6 +791,17 @@ export interface Backtest {
   note?: string;
 }
 
+export interface BotWorkerStatus {
+  enabled: boolean;
+  interval_sec: number;
+  running: boolean;
+  market_open: boolean;
+  ticks: number;
+  orders_placed: number;
+  last_tick: string | null;
+  last_note: string | null;
+}
+
 export interface PortfolioPoint {
   t: number; // unix seconds
   equity: number;

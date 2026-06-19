@@ -13,11 +13,12 @@ import {
   Zap,
   Play,
   Square,
+  Power,
   History,
 } from 'lucide-react';
 import { api, ApiError } from '@/api/client';
-import type { Bot, BotMode, EvalResult } from '@/api/types';
-import { Badge, ErrorState, Panel, Spinner, Toggle } from '@/components/ui';
+import type { Bot, BotMode, BotWorkerStatus, EvalResult } from '@/api/types';
+import { Badge, ErrorState, HelpTip, Panel, Spinner, Toggle } from '@/components/ui';
 import { BotEvaluation } from '@/components/BotEvaluation';
 import { timeAgo } from '@/lib/format';
 import { BuilderForm } from '@/views/Builder';
@@ -308,6 +309,80 @@ function BotRow({
   );
 }
 
+/* ---------- autonomous runner control ---------- */
+function AutoRunner() {
+  const [st, setSt] = useState<BotWorkerStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function load() {
+    try {
+      setSt(await api.botWorker());
+    } catch {
+      /* endpoint may be warming up */
+    }
+  }
+  useEffect(() => {
+    void load();
+    const t = setInterval(() => void load(), 15000);
+    return () => clearInterval(t);
+  }, []);
+
+  async function toggle() {
+    if (!st) return;
+    setBusy(true);
+    try {
+      setSt(await api.botWorkerUpdate({ enabled: !st.enabled }));
+    } catch {
+      /* ignore */
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!st) return null;
+  const on = st.enabled;
+  return (
+    <div
+      className={`mx-3 mt-3 rounded-lg border px-3 py-2 flex items-center gap-2.5 ${
+        on ? 'border-up/40 bg-up/5' : 'border-border bg-bg-2/40'
+      }`}
+    >
+      {on ? (
+        <Zap size={14} className="text-up shrink-0" />
+      ) : (
+        <Power size={14} className="text-muted shrink-0" />
+      )}
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-1.5">
+          <span className="micro-label">Auto-runner</span>
+          <HelpTip title="Autonomous bot runner">
+            When ON, the backend evaluates your enabled bots on their timeframe cadence during market
+            hours. <b>Auto</b> bots place paper orders automatically; <b>Semi</b> bots just record
+            signals for you to confirm; <b>Signal</b> bots only log. Every order still passes the full
+            risk engine + failsafes (kill switch, trading switch, daily cap).
+          </HelpTip>
+          <Badge tone={on ? 'up' : 'neutral'}>{on ? 'ON' : 'OFF'}</Badge>
+          <Badge tone={st.market_open ? 'up' : 'neutral'}>{st.market_open ? 'market open' : 'market closed'}</Badge>
+        </div>
+        <p className="text-2xs text-muted mt-0.5 truncate">
+          {on
+            ? st.last_note ?? `Running every ${st.interval_sec}s — waiting for first tick…`
+            : 'Off — bots only run when you hit “Evaluate / Run”. Turn on to trade automatically.'}
+          {st.orders_placed > 0 && <span className="text-text-dim"> · {st.orders_placed} placed</span>}
+        </p>
+      </div>
+      <button
+        className={on ? 'btn flex items-center gap-1 text-down' : 'btn-amber flex items-center gap-1'}
+        onClick={() => void toggle()}
+        disabled={busy}
+      >
+        {on ? <Square size={11} /> : <Play size={11} />}
+        {on ? 'Stop' : 'Start'}
+      </button>
+    </div>
+  );
+}
+
 /* ---------- main tile ---------- */
 export function BotSetup() {
   const [bots, setBots] = useState<Bot[]>([]);
@@ -441,6 +516,7 @@ export function BotSetup() {
         </div>
       ) : (
         <div className="flex flex-col">
+          <AutoRunner />
           {bots.map((b) => (
             <BotRow key={b.id} bot={b} onEdit={openEdit} onChanged={() => void load()} />
           ))}
