@@ -3,6 +3,8 @@ import type {
   Asset,
   Bar,
   Bot,
+  BotFromPromptResponse,
+  BotStatus,
   Briefing,
   ChatHistoryMessage,
   ChatMessageTurn,
@@ -20,9 +22,10 @@ import type {
   OptionExpiration,
   OptionsFlow,
   OptionsSelectResponse,
+  EvalItem,
+  EvalResult,
   Order,
   Position,
-  Proposal,
   ProposalsResponse,
   Regime,
   RiskCheckResult,
@@ -233,12 +236,20 @@ export const api = {
     request<Bot>(`/bots/${id}`, { method: 'PUT', body: JSON.stringify(b) }),
   deleteBot: (id: string) => request<void>(`/bots/${id}`, { method: 'DELETE' }),
   evaluateBot: (id: string) =>
-    request<ProposalsResponse>(`/bots/${id}/evaluate`, { method: 'POST' }).then(normalizeProposals),
+    request<ProposalsResponse>(`/bots/${id}/evaluate`, { method: 'POST' }).then(normalizeEval),
   runBot: (id: string, place: boolean) =>
     request<ProposalsResponse>(`/bots/${id}/run`, {
       method: 'POST',
       body: JSON.stringify({ place }),
-    }).then(normalizeProposals),
+    }).then(normalizeEval),
+  // Live status: last evaluation, mode, enabled. Degrades on 404/503.
+  botStatus: (id: string) => request<BotStatus>(`/bots/${id}/status`),
+  // "Build with AI" (Kimi): describe a strategy → draft Bot config + explanation.
+  botFromPrompt: (prompt: string, symbol?: string) =>
+    request<BotFromPromptResponse>('/bots/from-prompt', {
+      method: 'POST',
+      body: JSON.stringify({ prompt, symbol }),
+    }),
 
   // ---- DB Chat (Vanna-style NL → SQL via Gemma) -------------------------
   // Gemma can take 10–60s; no client timeout is imposed (fetch waits).
@@ -259,10 +270,18 @@ function normalizeSchema(res: ChatSchemaResponse): ChatSchemaTable[] {
   return res?.tables ?? [];
 }
 
-// Backend may return { proposals: [...] } or a bare Proposal[] — normalize both.
-function normalizeProposals(res: ProposalsResponse): Proposal[] {
-  if (Array.isArray(res)) return res;
-  return res?.proposals ?? [];
+// evaluate/run may return a bare array OR { proposals, mode, note, placed,
+// recorded_signals }. Normalize to a full EvalResult, preserving top-level meta.
+function normalizeEval(res: ProposalsResponse): EvalResult {
+  if (Array.isArray(res)) return { proposals: res as EvalItem[] };
+  const r = res as EvalResult;
+  return {
+    proposals: (r?.proposals ?? []) as EvalItem[],
+    mode: r?.mode,
+    note: r?.note,
+    placed: r?.placed,
+    recorded_signals: r?.recorded_signals,
+  };
 }
 
 export type Api = typeof api;

@@ -147,6 +147,8 @@ pub fn build_app(app_state: AppState) -> Router {
         .route("/bots/:id", put(update_bot).delete(delete_bot))
         .route("/bots/:id/evaluate", post(evaluate_bot))
         .route("/bots/:id/run", post(run_bot))
+        .route("/bots/:id/status", get(bot_status))
+        .route("/bots/from-prompt", post(bot_from_prompt))
         // research
         .route("/research/analyze", post(research_analyze))
         .route("/research/history", get(research_history))
@@ -708,7 +710,30 @@ async fn delete_bot(State(s): State<AppState>, Path(id): Path<String>) -> ApiRes
 }
 async fn evaluate_bot(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
     let bot = db::get_bot(&s.pool, &id).await?.ok_or_else(|| ApiError::not_found("bot not found"))?;
-    Ok(Json(bots::evaluate_bot(&s, &bot).await))
+    let result = bots::evaluate_bot(&s, &bot).await;
+    let _ = db::save_bot_evaluation(&s.pool, &id, &result).await;
+    Ok(Json(result))
+}
+async fn bot_status(State(s): State<AppState>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
+    let bot = db::get_bot(&s.pool, &id).await?.ok_or_else(|| ApiError::not_found("bot not found"))?;
+    Ok(Json(json!({
+        "bot": bot,
+        "last_evaluated_at": bot["last_evaluated_at"],
+        "last_result": bot["last_result"],
+        "mode": bot["mode"],
+        "enabled": bot["enabled"],
+    })))
+}
+async fn bot_from_prompt(State(s): State<AppState>, Json(body): Json<Value>) -> ApiResult<Json<Value>> {
+    let prompt = body["prompt"].as_str().unwrap_or("").trim();
+    if prompt.is_empty() {
+        return Err(ApiError::bad_request("prompt is required"));
+    }
+    let symbol = body["symbol"].as_str();
+    let result = bots::from_prompt(&s, prompt, symbol)
+        .await
+        .map_err(|e| ApiError::upstream(e.to_string()))?;
+    Ok(Json(result))
 }
 async fn run_bot(State(s): State<AppState>, Path(id): Path<String>, Json(body): Json<Value>) -> ApiResult<Json<Value>> {
     let bot = db::get_bot(&s.pool, &id).await?.ok_or_else(|| ApiError::not_found("bot not found"))?;

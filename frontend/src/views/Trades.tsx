@@ -39,9 +39,12 @@ function AssetClassBadge({ assetClass }: { assetClass: string }) {
 }
 
 function SourceBadge({ source }: { source: string }) {
-  const tone = source === 'ai' ? 'amber' : source === 'strategy' ? 'up' : 'neutral';
-  return <Badge tone={tone}>{source}</Badge>;
+  const tone =
+    source === 'ai' || source === 'bot' ? 'amber' : source === 'strategy' ? 'up' : 'neutral';
+  return <Badge tone={tone}>{source || 'manual'}</Badge>;
 }
+
+type SourceFilter = 'all' | 'manual' | 'strategy' | 'ai';
 
 type SortKey = 'time' | 'symbol' | 'qty' | 'status';
 
@@ -85,8 +88,11 @@ function StatsStrip({ trades }: { trades: Trade[] }) {
 // ---- main view -----------------------------------------------------------
 
 export function Trades() {
+  // Default to All/All so the user sees every trade (equity included) — the
+  // old Options+Canceled default hid their equity fills.
   const [status, setStatus] = useState<TradeStatusFilter>('all');
   const [assetClass, setAssetClass] = useState<'all' | 'equity' | 'option'>('all');
+  const [source, setSource] = useState<SourceFilter>('all');
   const [symbolQuery, setSymbolQuery] = useState('');
   const [sortKey, setSortKey] = useState<SortKey>('time');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
@@ -106,9 +112,14 @@ export function Trades() {
       if (q && !t.symbol.toUpperCase().includes(q)) return false;
       if (assetClass === 'equity' && t.asset_class !== 'us_equity') return false;
       if (assetClass === 'option' && t.asset_class !== 'option') return false;
+      if (source !== 'all') {
+        // 'ai' filter also matches bot-sourced trades.
+        const s = t.source || 'manual';
+        if (source === 'ai' ? !(s === 'ai' || s === 'bot') : s !== source) return false;
+      }
       return true;
     });
-  }, [all, symbolQuery, assetClass]);
+  }, [all, symbolQuery, assetClass, source]);
 
   const sorted = useMemo(() => {
     const rows = [...filtered];
@@ -217,7 +228,17 @@ export function Trades() {
                     <Badge tone={statusTone(t.status)}>{t.status}</Badge>
                   </td>
                   <td className="px-2 py-1.5">
-                    <SourceBadge source={t.source} />
+                    <div className="flex items-center gap-1">
+                      <SourceBadge source={t.source} />
+                      {t.strategy_id && (
+                        <span
+                          className="text-2xs text-muted font-mono truncate max-w-[80px]"
+                          title={t.strategy_id}
+                        >
+                          {t.strategy_id}
+                        </span>
+                      )}
+                    </div>
                   </td>
                 </tr>
               );
@@ -256,6 +277,16 @@ export function Trades() {
           { value: 'open', label: 'Open' },
           { value: 'filled', label: 'Filled' },
           { value: 'canceled', label: 'Canceled' },
+        ]}
+      />
+      <Toggle
+        value={source}
+        onChange={(v) => setSource(v as SourceFilter)}
+        options={[
+          { value: 'all', label: 'All src' },
+          { value: 'manual', label: 'Manual' },
+          { value: 'strategy', label: 'Strategy' },
+          { value: 'ai', label: 'Bot/AI' },
         ]}
       />
     </div>

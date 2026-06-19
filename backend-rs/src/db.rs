@@ -125,6 +125,13 @@ async fn init_mysql(pool: &sqlx::mysql::MySqlPool) -> anyhow::Result<()> {
     for stmt in ddl {
         let _ = sqlx::query(stmt).execute(pool).await;
     }
+    // Migration-safe ALTERs (ignore errors if column already exists).
+    for alter in [
+        "ALTER TABLE bots ADD COLUMN last_evaluated_at DATETIME NULL",
+        "ALTER TABLE bots ADD COLUMN last_result JSON NULL",
+    ] {
+        let _ = sqlx::query(alter).execute(pool).await;
+    }
     let count: i64 = sqlx::query("SELECT COUNT(*) AS c FROM watchlist")
         .fetch_one(pool)
         .await?
@@ -160,6 +167,13 @@ async fn init_sqlite(pool: &sqlx::sqlite::SqlitePool) -> anyhow::Result<()> {
     ];
     for stmt in ddl {
         sqlx::query(stmt).execute(pool).await?;
+    }
+    // Migration-safe ALTERs (ignore errors if column already exists).
+    for alter in [
+        "ALTER TABLE bots ADD COLUMN last_evaluated_at TEXT",
+        "ALTER TABLE bots ADD COLUMN last_result TEXT",
+    ] {
+        let _ = sqlx::query(alter).execute(pool).await;
     }
     let count: i64 = sqlx::query("SELECT COUNT(*) AS c FROM watchlist")
         .fetch_one(pool)
@@ -1306,6 +1320,8 @@ fn bot_row_to_json_my(r: &sqlx::mysql::MySqlRow) -> Value {
         "risk": r.get::<Option<Value>, _>("risk").unwrap_or(json!({})),
         "action": action.filter(|v| !v.is_null()).unwrap_or_else(default_option_action),
         "mode": r.get::<Option<String>, _>("mode"),
+        "last_evaluated_at": iso(r.try_get::<Option<NaiveDateTime>, _>("last_evaluated_at").ok().flatten()),
+        "last_result": r.try_get::<Option<Value>, _>("last_result").ok().flatten().unwrap_or(Value::Null),
         "created_at": iso(r.get::<Option<NaiveDateTime>, _>("created_at")),
         "updated_at": iso(r.get::<Option<NaiveDateTime>, _>("updated_at")),
     })
@@ -1325,6 +1341,8 @@ fn bot_row_to_json_sq(r: &sqlx::sqlite::SqliteRow) -> Value {
         "risk": sq_json(r, "risk", json!({})),
         "action": if action.is_null() { default_option_action() } else { action },
         "mode": sq_str(r, "mode"),
+        "last_evaluated_at": sq_str(r, "last_evaluated_at"),
+        "last_result": sq_json(r, "last_result", Value::Null),
         "created_at": sq_str(r, "created_at"),
         "updated_at": sq_str(r, "updated_at"),
     })
@@ -1467,6 +1485,30 @@ pub async fn delete_bot(db: &Db, id: &str) -> ApiResult<bool> {
         Db::Sq(pool) => sqlx::query(sql).bind(id).execute(pool).await?.rows_affected(),
     };
     Ok(affected > 0)
+}
+
+/// Persist the latest evaluation result for a bot.
+pub async fn save_bot_evaluation(db: &Db, id: &str, result: &Value) -> ApiResult<()> {
+    let sql = "UPDATE bots SET last_evaluated_at = ?, last_result = ? WHERE id = ?";
+    match db {
+        Db::My(pool) => {
+            sqlx::query(sql)
+                .bind(now_naive())
+                .bind(if result.is_null() { None } else { Some(result.clone()) })
+                .bind(id)
+                .execute(pool)
+                .await?;
+        }
+        Db::Sq(pool) => {
+            sqlx::query(sql)
+                .bind(now_iso())
+                .bind(json_text(result))
+                .bind(id)
+                .execute(pool)
+                .await?;
+        }
+    }
+    Ok(())
 }
 
 pub async fn seed_default_bot(db: &Db) -> ApiResult<()> {

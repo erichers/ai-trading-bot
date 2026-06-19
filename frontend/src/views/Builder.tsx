@@ -9,6 +9,8 @@ import {
   ChevronLeft,
   ChevronRight,
   Zap,
+  Play,
+  Sparkles,
   TrendingUp,
   TrendingDown,
   CandlestickChart,
@@ -21,16 +23,18 @@ import type {
   BotConfig,
   BotMode,
   BotRule,
+  EvalResult,
   IndicatorCatalogItem,
   OptionExpiration,
   OptionsSelectResponse,
-  Proposal,
   SelectableContract,
   SnapshotMap,
 } from '@/api/types';
 import { blankAction } from '@/api/types';
 import { money, num, pct } from '@/lib/format';
 import { Badge, Empty, ErrorState, Panel, Spinner, Toggle } from '@/components/ui';
+import { BotEvaluation } from '@/components/BotEvaluation';
+import { Markdown } from '@/components/Markdown';
 import { TickerSearch } from '@/components/TickerSearch';
 import { usePolling } from '@/hooks/usePolling';
 
@@ -112,7 +116,7 @@ function blankDraft(firstIndicator: string): Draft {
   };
 }
 
-function botToDraft(b: Bot): Draft {
+function botToDraft(b: Partial<Bot>): Draft {
   const symbols = [...(b.symbols || [])];
   const action: BotAction = b.action
     ? { ...blankAction(), ...b.action }
@@ -122,8 +126,8 @@ function botToDraft(b: Bot): Draft {
         right: b.config?.side ?? 'auto',
       };
   return {
-    id: b.id,
-    name: b.name,
+    id: b.id ?? '',
+    name: b.name ?? 'New Bot',
     symbols,
     primary: symbols[0] ?? '',
     timeframe: '5Min',
@@ -337,51 +341,76 @@ function ContractPicker({
   );
 }
 
-// ---- proposals table -----------------------------------------------------
+// ==========================================================================
+//  AI builder ("Build with AI" — Kimi) entry
+// ==========================================================================
 
-function ProposalsTable({ proposals }: { proposals: Proposal[] }) {
-  if (proposals.length === 0) {
-    return <Empty label="No proposals — bot found no qualifying setups" />;
+function AiBuilder({ onDraft }: { onDraft: (b: Partial<Bot>, explanation: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [prompt, setPrompt] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function build() {
+    const text = prompt.trim();
+    if (!text) {
+      setError('Describe the strategy first.');
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await api.botFromPrompt(text);
+      onDraft(res.draft || {}, res.explanation || '');
+      setOpen(false);
+    } catch (e) {
+      if (e instanceof ApiError && (e.status === 404 || e.status === 503)) {
+        setError('AI builder unavailable right now — build manually below.');
+      } else {
+        setError((e as Error).message || 'Kimi could not design the strategy.');
+      }
+    } finally {
+      setBusy(false);
+    }
   }
+
+  if (!open) {
+    return (
+      <button
+        className="btn-amber flex items-center justify-center gap-1.5 py-2"
+        onClick={() => setOpen(true)}
+      >
+        <Sparkles size={14} /> Describe your strategy (build with AI)
+      </button>
+    );
+  }
+
   return (
-    <div className="flex flex-col gap-1.5">
-      {proposals.map((p, i) => {
-        const approved = p.risk_decision?.approved;
-        return (
-          <div
-            key={`${p.occ_symbol || p.symbol}-${i}`}
-            className="rounded border border-border bg-bg-2 p-2.5"
-          >
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="font-mono text-sm text-text w-14">{p.symbol}</span>
-              <Badge tone={p.right === 'call' ? 'up' : 'down'}>{p.right}</Badge>
-              <span className="num text-xs text-text-dim">
-                {money(p.strike)} · {p.expiration}
-              </span>
-              <span className="num text-2xs text-muted">{p.occ_symbol}</span>
-              <span className="num text-xs text-text-dim">mid {money(p.mid_price)}</span>
-              <span className="ml-auto">
-                <Badge tone={approved ? 'up' : 'down'}>
-                  {p.risk_decision?.decision || (approved ? 'approved' : 'vetoed')}
-                </Badge>
-              </span>
-            </div>
-            <div className="flex items-center gap-2 mt-2">
-              <span className="text-2xs text-muted whitespace-nowrap">Conviction</span>
-              <div className="flex-1 h-1.5 bg-bg rounded overflow-hidden">
-                <div
-                  className="h-full bg-amber"
-                  style={{ width: `${Math.max(0, Math.min(100, p.conviction))}%` }}
-                />
-              </div>
-              <span className="num text-amber text-xs w-8 text-right">{num(p.conviction, 0)}</span>
-            </div>
-            {p.rationale && (
-              <p className="text-2xs text-text-dim leading-relaxed mt-1.5">{p.rationale}</p>
-            )}
-          </div>
-        );
-      })}
+    <div className="rounded border border-amber/40 bg-amber/5 p-3 flex flex-col gap-2">
+      <div className="flex items-center justify-between">
+        <span className="micro-label flex items-center gap-1.5 text-amber">
+          <Sparkles size={13} /> Describe your strategy
+        </span>
+        <button className="btn" onClick={() => setOpen(false)} disabled={busy}>
+          <X size={12} />
+        </button>
+      </div>
+      <textarea
+        className="input w-full min-h-[80px] resize-y"
+        value={prompt}
+        onChange={(e) => setPrompt(e.target.value)}
+        disabled={busy}
+        placeholder="Day-trade QQQ: buy weekly ATM calls when RSI(14) crosses above 32 on 5m, AI conviction > 60, 1 contract, semi-auto"
+      />
+      <button
+        className="btn-amber flex items-center justify-center gap-1.5 py-2"
+        onClick={build}
+        disabled={busy}
+      >
+        <Sparkles size={14} /> {busy ? 'Building…' : 'Build with AI'}
+      </button>
+      {busy && <Spinner label="Kimi is designing your strategy… (can take ~60s)" />}
+      {error && <div className="text-down text-xs micro-label">{error}</div>}
     </div>
   );
 }
@@ -412,7 +441,10 @@ export function BuilderForm({
 
   const [evaluating, setEvaluating] = useState(false);
   const [evalError, setEvalError] = useState<string | null>(null);
-  const [proposals, setProposals] = useState<Proposal[] | null>(null);
+  const [evalResult, setEvalResult] = useState<EvalResult | null>(null);
+  const [running, setRunning] = useState(false);
+
+  const [aiExplanation, setAiExplanation] = useState<string | null>(null);
 
   const [expirations, setExpirations] = useState<OptionExpiration[]>([]);
 
@@ -617,13 +649,44 @@ export function BuilderForm({
     setEvalError(null);
     try {
       const res = await api.evaluateBot(id);
-      setProposals(res);
+      setEvalResult(res);
     } catch (e) {
-      if (e instanceof ApiError && e.status === 404) setEvalError('Bot engine starting…');
+      if (e instanceof ApiError && (e.status === 404 || e.status === 503))
+        setEvalError('Bot engine starting…');
       else setEvalError((e as Error).message || 'Evaluation failed');
     } finally {
       setEvaluating(false);
     }
+  }
+
+  async function run() {
+    const id = saved?.id || draft.id;
+    if (!id) {
+      setEvalError('Save the bot before running.');
+      return;
+    }
+    if (!window.confirm('Run this bot now and place paper orders for any firing setups?')) return;
+    setRunning(true);
+    setEvalError(null);
+    try {
+      const res = await api.runBot(id, true);
+      setEvalResult(res);
+    } catch (e) {
+      if (e instanceof ApiError && (e.status === 404 || e.status === 503))
+        setEvalError('Bot engine starting…');
+      else setEvalError((e as Error).message || 'Run failed');
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  // Fill the form from an AI-generated draft (Kimi). Resets evaluation state.
+  function applyAiDraft(b: Partial<Bot>, explanation: string) {
+    setDraft(botToDraft(b));
+    setAiExplanation(explanation || null);
+    setSaved(null);
+    setEvalResult(null);
+    setStep(0);
   }
 
   // The selected contract details (for the prominent "Selected:" line).
@@ -643,6 +706,17 @@ export function BuilderForm({
           </button>
         )}
       </div>
+
+      {/* Build with AI (Kimi) — prominent on the first step */}
+      {step === 0 && <AiBuilder onDraft={applyAiDraft} />}
+      {aiExplanation && (
+        <div className="rounded border border-amber/30 bg-amber/5 px-3 py-2">
+          <div className="micro-label text-amber mb-1 flex items-center gap-1.5">
+            <Sparkles size={12} /> AI strategy — tweak any step, then Save
+          </div>
+          <Markdown source={aiExplanation} />
+        </div>
+      )}
 
       {/* name (always visible) */}
       <div>
@@ -1091,22 +1165,32 @@ export function BuilderForm({
                 <Badge tone={saved.enabled ? 'up' : 'neutral'}>
                   {saved.enabled ? 'ON' : 'OFF'}
                 </Badge>
+                <Badge tone={saved.mode === 'auto' ? 'up' : saved.mode === 'semi' ? 'amber' : 'neutral'}>
+                  {saved.mode}
+                </Badge>
               </div>
-              <button
-                className="btn flex items-center justify-center gap-1.5 py-2"
-                onClick={evaluate}
-                disabled={evaluating}
-              >
-                <Zap size={13} /> {evaluating ? 'Evaluating…' : 'Evaluate now'}
-              </button>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  className="btn flex items-center justify-center gap-1.5 py-2"
+                  onClick={evaluate}
+                  disabled={evaluating || running}
+                >
+                  <Zap size={13} /> {evaluating ? 'Evaluating…' : 'Evaluate now'}
+                </button>
+                <button
+                  className="btn flex items-center justify-center gap-1.5 py-2 text-amber"
+                  onClick={run}
+                  disabled={evaluating || running}
+                  title="Run the bot and place paper orders for firing setups"
+                >
+                  <Play size={13} /> {running ? 'Running…' : 'Run (paper)'}
+                </button>
+              </div>
               {evalError && <div className="text-down text-xs micro-label">{evalError}</div>}
-              {evaluating ? (
-                <Spinner label="evaluating" />
-              ) : proposals ? (
-                <div>
-                  <div className="micro-label mb-2">Proposals</div>
-                  <ProposalsTable proposals={proposals} />
-                </div>
+              {evaluating || running ? (
+                <Spinner label={running ? 'running' : 'evaluating'} />
+              ) : evalResult ? (
+                <BotEvaluation result={evalResult} />
               ) : null}
             </div>
           )}

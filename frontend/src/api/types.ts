@@ -321,7 +321,7 @@ export interface Regime {
 }
 
 export type AssetClass = 'us_equity' | 'option';
-export type TradeSource = 'manual' | 'strategy' | 'ai';
+export type TradeSource = 'manual' | 'strategy' | 'ai' | 'bot';
 
 // Full persisted trade ledger row from MySQL.
 export interface Trade {
@@ -558,6 +558,7 @@ export interface ProposalRiskDecision {
   approved: boolean;
   decision: string;
   vetoes?: { rule: string; message: string }[];
+  warnings?: { rule: string; message: string }[];
 }
 
 export interface Proposal {
@@ -575,8 +576,102 @@ export interface Proposal {
   risk_decision: ProposalRiskDecision;
 }
 
-// /evaluate and /run may return { proposals } or a bare array — handle both.
-export type ProposalsResponse = { proposals: Proposal[] } | Proposal[];
+// ---- Richer evaluate/run proposal shape (new backend contract) -----------
+// The backend now returns a per-symbol decision breakdown. Older fields above
+// may still be present; treat everything optional and degrade gracefully.
+
+export interface ProposalTrigger {
+  indicator: string;
+  operator: string;
+  value: string | number;
+  actual: number | string | null;
+  passed: boolean;
+}
+
+export interface ProposalAiGate {
+  enabled: boolean;
+  conviction: number;
+  min_conviction: number;
+  sentiment?: number;
+  passed: boolean;
+}
+
+export interface ProposalDirection {
+  right: 'call' | 'put' | 'skip';
+  rationale: string;
+}
+
+export interface ProposalContract {
+  occ_symbol: string;
+  strike: number;
+  expiration: string;
+  mid: number;
+  delta?: number;
+  [key: string]: unknown;
+}
+
+export interface ProposalRisk {
+  approved: boolean;
+  decision: string;
+  vetoes?: { rule: string; message: string }[];
+  warnings?: { rule: string; message: string }[];
+}
+
+// A single evaluation item. Combines the legacy Proposal fields (optional) with
+// the new structured breakdown (also optional). evaluate/run may return either.
+export interface EvalItem {
+  symbol: string;
+  // new structured fields
+  firing?: boolean;
+  reason?: string;
+  triggers?: ProposalTrigger[];
+  trigger_result?: boolean;
+  ai_gate?: ProposalAiGate;
+  direction?: ProposalDirection;
+  contract?: ProposalContract | null;
+  risk?: ProposalRisk;
+  // legacy fields (older simpler shape)
+  occ_symbol?: string;
+  right?: OptionRight;
+  strike?: number;
+  expiration?: string;
+  mid_price?: number;
+  est_premium?: number;
+  qty?: number;
+  conviction?: number;
+  sentiment?: number;
+  rationale?: string;
+  risk_decision?: ProposalRiskDecision;
+}
+
+// Full evaluate/run response. Top level may carry mode/note/placed/recorded.
+export interface EvalResult {
+  proposals: EvalItem[];
+  mode?: BotMode;
+  note?: string;
+  placed?: unknown[];
+  recorded_signals?: number;
+}
+
+// /evaluate and /run may return { proposals, ... } or a bare array — handle both.
+export type ProposalsResponse = EvalResult | EvalItem[] | { proposals: Proposal[] } | Proposal[];
+
+// ---- Bot live status -----------------------------------------------------
+
+export interface BotStatus {
+  bot: Bot;
+  last_evaluated_at: string | null;
+  last_result: EvalResult | null;
+  mode: BotMode;
+  enabled: boolean;
+}
+
+// ---- AI ("Build with AI" / Kimi) -----------------------------------------
+
+export interface BotFromPromptResponse {
+  draft: Partial<Bot>;
+  explanation: string;
+}
 
 // ---- DB Chat (Vanna-style natural-language → SQL) ------------------------
 

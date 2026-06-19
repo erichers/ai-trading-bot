@@ -271,7 +271,21 @@ async fn resolve_expiry(state: &AppState, symbol: &str, expiry: Option<&str>) ->
             .await?
             .ok_or_else(|| ApiError::upstream(format!("No weekly expiration for {symbol}.")));
     }
-    if NaiveDate::parse_from_str(spec, "%Y-%m-%d").is_ok() {
+    if spec.to_lowercase() == "nearest_monthly" {
+        // No dedicated monthly picker; nearest weekly is a safe, always-valid choice.
+        return nearest_weekly(state, symbol)
+            .await?
+            .ok_or_else(|| ApiError::upstream(format!("No expiration for {symbol}.")));
+    }
+    if let Ok(d) = NaiveDate::parse_from_str(spec, "%Y-%m-%d") {
+        // A stale explicit date (e.g. a bot saved last week) would query an expired
+        // chain forever. If it's in the past, fall back to the nearest weekly so the
+        // bot keeps working without manual editing.
+        if d < Utc::now().date_naive() {
+            return nearest_weekly(state, symbol)
+                .await?
+                .ok_or_else(|| ApiError::upstream(format!("No weekly expiration for {symbol}.")));
+        }
         Ok(spec.to_string())
     } else {
         Err(ApiError::bad_request(format!("Bad expiry '{spec}'.")))
