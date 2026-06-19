@@ -708,6 +708,69 @@ export interface ChatHistoryMessage {
   created_at?: string;
 }
 
+// ---- Backtest ------------------------------------------------------------
+
+export type BacktestLookback = '1D' | '2D' | '1W' | '1M' | '3M';
+
+export interface BacktestRequest {
+  bot_id?: string;
+  strategy_id?: string;
+  symbol?: string;
+  symbols?: string[];
+  timeframe?: string;
+  lookback: BacktestLookback;
+  rules?: unknown[];
+  action?: unknown;
+  ai_gate?: unknown;
+}
+
+export interface BacktestMetrics {
+  total_return_pct: number;
+  win_rate: number;
+  num_trades: number;
+  wins: number;
+  losses: number;
+  profit_factor: number;
+  max_drawdown_pct: number;
+  avg_win_pct: number;
+  avg_loss_pct: number;
+}
+
+export interface BacktestEquityPoint {
+  t: string;
+  equity: number;
+}
+
+export interface BacktestTrade {
+  symbol: string;
+  side: 'long' | 'short';
+  right?: 'call' | 'put';
+  entry_time: string;
+  entry_price: number;
+  exit_time: string;
+  exit_price: number;
+  pnl_pct: number;
+  exit_reason: string;
+}
+
+export interface BacktestPerSymbol {
+  symbol: string;
+  metrics: BacktestMetrics;
+  equity_curve: BacktestEquityPoint[];
+  trades: BacktestTrade[];
+}
+
+export interface Backtest {
+  config_name: string;
+  timeframe: string;
+  lookback: BacktestLookback;
+  start: string;
+  end: string;
+  combined: BacktestMetrics;
+  per_symbol: BacktestPerSymbol[];
+  note?: string;
+}
+
 export interface WSMessage {
   type: 'quote' | 'news' | 'signal';
   [key: string]: unknown;

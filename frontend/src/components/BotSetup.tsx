@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Plus,
   Bot as BotIcon,
@@ -10,6 +11,7 @@ import {
   Trash2,
   Zap,
   Play,
+  History,
 } from 'lucide-react';
 import { api, ApiError } from '@/api/client';
 import type { Bot, BotMode, EvalResult } from '@/api/types';
@@ -48,6 +50,7 @@ function BotRow({
   const [evalError, setEvalError] = useState<string | null>(null);
   const [result, setResult] = useState<EvalResult | null>(null);
   const [lastAt, setLastAt] = useState<string | null>(null);
+  const navigate = useNavigate();
 
   const right = bot.action?.right;
 
@@ -197,6 +200,17 @@ function BotRow({
               disabled={busy}
             >
               <Pencil size={11} /> Edit
+            </button>
+            <button
+              className="btn flex items-center gap-1"
+              onClick={(e) => {
+                e.stopPropagation();
+                navigate(`/backtest?bot=${encodeURIComponent(bot.id)}`);
+              }}
+              disabled={busy}
+              title="Backtest this bot over real history"
+            >
+              <History size={11} /> Backtest
             </button>
             <button
               className="btn flex items-center gap-1 text-down"

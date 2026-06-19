@@ -3,6 +3,7 @@
 //! the native app calls it with SQLite.
 
 pub mod alpaca;
+pub mod backtest;
 pub mod bots;
 pub mod chat;
 pub mod config;
@@ -149,6 +150,8 @@ pub fn build_app(app_state: AppState) -> Router {
         .route("/bots/:id/run", post(run_bot))
         .route("/bots/:id/status", get(bot_status))
         .route("/bots/from-prompt", post(bot_from_prompt))
+        // backtest
+        .route("/backtest", post(backtest_run))
         // research
         .route("/research/analyze", post(research_analyze))
         .route("/research/history", get(research_history))
@@ -739,6 +742,11 @@ async fn run_bot(State(s): State<AppState>, Path(id): Path<String>, Json(body): 
     let bot = db::get_bot(&s.pool, &id).await?.ok_or_else(|| ApiError::not_found("bot not found"))?;
     let place = body["place"].as_bool().unwrap_or(false);
     Ok(Json(bots::run_bot(&s, &bot, place).await))
+}
+
+// ---- backtest ---------------------------------------------------------------
+async fn backtest_run(State(s): State<AppState>, Json(body): Json<Value>) -> ApiResult<Json<Value>> {
+    Ok(Json(backtest::run_backtest(&s, &body).await?))
 }
 
 // ---- research ---------------------------------------------------------------

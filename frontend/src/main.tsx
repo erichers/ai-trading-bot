@@ -15,6 +15,7 @@ import { Chat } from './views/Chat';
 import { News } from './views/News';
 import { PositionsOrders } from './views/PositionsOrders';
 import { Trades } from './views/Trades';
+import { Backtest } from './views/Backtest';
 import { Risk } from './views/Risk';
 import { Onboarding } from './views/Onboarding';
 import { SettingsView } from './views/Settings';
@@ -39,6 +40,7 @@ const router = createBrowserRouter(
         { path: 'news', element: <News /> },
         { path: 'positions', element: <PositionsOrders /> },
         { path: 'trades', element: <Trades /> },
+        { path: 'backtest', element: <Backtest /> },
         { path: 'risk', element: <Risk /> },
         { path: 'onboarding', element: <Onboarding /> },
         { path: 'settings', element: <SettingsView /> },

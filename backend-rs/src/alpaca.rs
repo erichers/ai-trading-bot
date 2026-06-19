@@ -427,6 +427,65 @@ impl Alpaca {
         Ok(Value::Array(out))
     }
 
+    /// Fetch bars from `start_days_ago` until now, following pagination so the
+    /// window reaches the most RECENT bars (unlike `get_bars`, which returns the
+    /// oldest `limit` bars from a fixed 400-day start). Used by the backtester so
+    /// the tested window ends at the latest available real bar. NO MOCK DATA.
+    pub async fn get_bars_since(
+        &self,
+        symbol: &str,
+        timeframe: &str,
+        start_days_ago: i64,
+        max_bars: usize,
+    ) -> ApiResult<Value> {
+        let tf = map_timeframe(timeframe);
+        let start = (Utc::now() - chrono::Duration::days(start_days_ago)).to_rfc3339();
+        let url = format!("{}/v2/stocks/{}/bars", DATA_BASE, symbol);
+        let mut out: Vec<Value> = vec![];
+        let mut page_token: Option<String> = None;
+        // Follow up to a bounded number of pages (1000 bars/page) to gather the
+        // window without unbounded looping.
+        for _ in 0..20 {
+            let mut query: Vec<(&str, String)> = vec![
+                ("timeframe", tf.clone()),
+                ("start", start.clone()),
+                ("limit", "10000".to_string()),
+                ("feed", "iex".to_string()),
+                ("adjustment", "raw".to_string()),
+            ];
+            if let Some(tok) = &page_token {
+                query.push(("page_token", tok.clone()));
+            }
+            let resp = self.get_data(&url, &query).await?;
+            let empty = vec![];
+            let bars = resp["bars"].as_array().unwrap_or(&empty);
+            for b in bars {
+                out.push(json!({
+                    "t": b["t"].as_str().unwrap_or(""),
+                    "o": fnum(&b["o"], 0.0),
+                    "h": fnum(&b["h"], 0.0),
+                    "l": fnum(&b["l"], 0.0),
+                    "c": fnum(&b["c"], 0.0),
+                    "v": b["v"].as_i64().unwrap_or(0),
+                }));
+            }
+            page_token = resp["next_page_token"].as_str().map(|s| s.to_string());
+            if page_token.is_none() {
+                break;
+            }
+        }
+        if out.is_empty() {
+            return Err(ApiError::upstream(format!(
+                "No bars returned for {symbol} ({timeframe})."
+            )));
+        }
+        // Keep only the most recent `max_bars` (warmup + window).
+        if out.len() > max_bars {
+            out = out.split_off(out.len() - max_bars);
+        }
+        Ok(Value::Array(out))
+    }
+
     // ---- quote --------------------------------------------------------------
     pub async fn get_quote(&self, symbol: &str) -> ApiResult<Value> {
         let url = format!("{}/v2/stocks/{}/quotes/latest", DATA_BASE, symbol);

@@ -1,6 +1,8 @@
 import type {
   Account,
   Asset,
+  Backtest,
+  BacktestRequest,
   Bar,
   Bot,
   BotFromPromptResponse,
@@ -250,6 +252,12 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ prompt, symbol }),
     }),
+
+  // ---- Backtest ----------------------------------------------------------
+  // A backtest simulates over real history and can take 10–30s; no client
+  // timeout is imposed (fetch waits). Degrade gracefully on 404/503.
+  backtest: (body: BacktestRequest) =>
+    request<Backtest>('/backtest', { method: 'POST', body: JSON.stringify(body) }),
 
   // ---- DB Chat (Vanna-style NL → SQL via Gemma) -------------------------
   // Gemma can take 10–60s; no client timeout is imposed (fetch waits).
