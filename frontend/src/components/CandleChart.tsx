@@ -97,30 +97,30 @@ export function CandleChart({
     const initH = (height ?? el.clientHeight) || 300;
     const chart = createChart(el, {
       layout: {
-        background: { type: ColorType.Solid, color: '#0d1117' },
-        textColor: '#8b94a3',
+        background: { type: ColorType.Solid, color: '#000000' },
+        textColor: '#A8A8A8',
         fontFamily: 'monospace',
         fontSize: 10,
       },
       grid: {
-        vertLines: { color: '#1f2530' },
-        horzLines: { color: '#1f2530' },
+        vertLines: { color: 'rgba(255,255,255,0.06)' },
+        horzLines: { color: 'rgba(255,255,255,0.06)' },
       },
       crosshair: { mode: CrosshairMode.Normal },
-      rightPriceScale: { borderColor: '#1f2530' },
-      timeScale: { borderColor: '#1f2530', timeVisible: true, secondsVisible: false },
+      rightPriceScale: { borderColor: 'rgba(255,255,255,0.08)' },
+      timeScale: { borderColor: 'rgba(255,255,255,0.08)', timeVisible: true, secondsVisible: false },
       width: initW,
       height: initH,
       autoSize: false,
     });
     chartRef.current = chart;
     candleRef.current = chart.addCandlestickSeries({
-      upColor: '#1bcf6b',
-      downColor: '#ff4d4d',
-      borderUpColor: '#1bcf6b',
-      borderDownColor: '#ff4d4d',
-      wickUpColor: '#1bcf6b',
-      wickDownColor: '#ff4d4d',
+      upColor: '#00C805',
+      downColor: '#FF5000',
+      borderUpColor: '#00C805',
+      borderDownColor: '#FF5000',
+      wickUpColor: '#00C805',
+      wickDownColor: '#FF5000',
     });
     volRef.current = chart.addHistogramSeries({
       priceFormat: { type: 'volume' },
@@ -166,7 +166,7 @@ export function CandleChart({
         const vData: HistogramData[] = bars.map((b) => ({
           time: toTime(b.t),
           value: b.v,
-          color: b.c >= b.o ? 'rgba(27,207,107,0.4)' : 'rgba(255,77,77,0.4)',
+          color: b.c >= b.o ? 'rgba(0,200,5,0.4)' : 'rgba(255,80,0,0.4)',
         }));
         volRef.current.setData(vData);
       } else {
@@ -200,7 +200,7 @@ export function CandleChart({
     };
 
     if (overlays.sma) {
-      addLine(sma(closes, 20), '#f7a01d');
+      addLine(sma(closes, 20), '#CCFF00');
       addLine(sma(closes, 50), '#56a8ff');
     }
     if (overlays.ema) {

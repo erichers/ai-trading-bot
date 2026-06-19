@@ -2,6 +2,9 @@
 @import 'react-grid-layout/css/styles.css';
 @import 'react-resizable/css/styles.css';
 
+/* Inter for UI typography (Robinhood-clean). Falls back to system sans. */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -18,10 +21,13 @@ body,
 }
 
 body {
-  background: #0a0b0d;
-  color: #c9d1da;
-  font-family: '"JetBrains Mono"', 'SF Mono', Menlo, Consolas, monospace;
+  background: #000000;
+  color: #f5f5f5;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-feature-settings: 'cv11', 'ss01';
+  letter-spacing: -0.01em;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 ::-webkit-scrollbar {
@@ -29,52 +35,61 @@ body {
   height: 8px;
 }
 ::-webkit-scrollbar-track {
-  background: #0d1117;
+  background: #000000;
 }
 ::-webkit-scrollbar-thumb {
-  background: #2a3140;
+  background: rgba(255, 255, 255, 0.12);
   border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #3a4250;
+  background: rgba(255, 255, 255, 0.22);
 }
 
 @layer components {
+  /* Soft rounded cards with comfortable padding. */
   .panel {
-    @apply bg-panel border border-border rounded;
+    @apply bg-panel border border-border rounded-2xl;
   }
+  /* Tasteful, dim, letter-spaced micro labels (softer than before). */
   .micro-label {
-    @apply text-2xs uppercase tracking-widest text-muted font-medium;
+    @apply text-2xs uppercase tracking-[0.12em] text-muted font-medium;
   }
+  /* Numbers only — mono + tabular figures. */
   .num {
     @apply font-mono tabular-nums;
   }
   .data-row {
-    @apply border-b border-border/60 hover:bg-panel-2 transition-colors;
+    @apply border-b border-border hover:bg-panel-2 transition-colors;
   }
+  /* Secondary / ghost button — fully-rounded pill, subtle outline. */
   .btn {
-    @apply px-3 py-1.5 text-xs rounded border border-border-2 bg-panel-2 hover:bg-border text-text transition-colors;
+    @apply inline-flex items-center justify-center px-4 py-1.5 text-xs font-medium rounded-full border border-border-2 bg-transparent hover:bg-panel-2 text-text transition-colors;
   }
+  /* Primary button — lime fill, black text, pill. */
   .btn-amber {
-    @apply px-3 py-1.5 text-xs rounded border border-amber/40 bg-amber/10 hover:bg-amber/20 text-amber transition-colors;
+    @apply inline-flex items-center justify-center px-4 py-1.5 text-xs font-semibold rounded-full border border-transparent bg-amber hover:bg-amber-dim text-black transition-colors;
+  }
+  /* Destructive button — vivid red pill. */
+  .btn-danger {
+    @apply inline-flex items-center justify-center px-4 py-1.5 text-xs font-semibold rounded-full border border-transparent bg-down hover:opacity-90 text-white transition-colors;
   }
   .input {
-    @apply bg-bg-2 border border-border rounded px-2 py-1.5 text-sm text-text outline-none focus:border-amber/50;
+    @apply bg-panel-2 border border-border rounded-lg px-3 py-2 text-sm text-text outline-none focus:border-amber/60 transition-colors;
   }
 }
 
 @keyframes flashUp {
-  0% { background-color: rgba(27, 207, 107, 0.25); }
+  0% { background-color: rgba(0, 200, 5, 0.22); }
   100% { background-color: transparent; }
 }
 @keyframes flashDown {
-  0% { background-color: rgba(255, 77, 77, 0.25); }
+  0% { background-color: rgba(255, 80, 0, 0.22); }
   100% { background-color: transparent; }
 }
 .flash-up { animation: flashUp 0.6s ease-out; }
 .flash-down { animation: flashDown 0.6s ease-out; }
 
-/* ---- react-grid-layout terminal theming ---- */
+/* ---- react-grid-layout theming ---- */
 .layout .react-grid-item {
   /* each tile holds a full-height panel */
   display: flex;
@@ -95,9 +110,9 @@ body {
   cursor: grabbing;
 }
 .layout .react-grid-item.react-grid-placeholder {
-  background: rgba(247, 160, 29, 0.15);
-  border: 1px dashed rgba(247, 160, 29, 0.5);
-  border-radius: 4px;
+  background: rgba(204, 255, 0, 0.12);
+  border: 1px dashed rgba(204, 255, 0, 0.5);
+  border-radius: 1rem;
   opacity: 1;
 }
 /* When locked, the dashboard is fully interactive — hide grips + resize handles. */
@@ -110,25 +125,25 @@ body {
 /* drag handle grip in panel headers */
 .drag-handle {
   cursor: grab;
-  color: #5c6675;
+  color: #6b6b6b;
 }
 .drag-handle:hover {
-  color: #c9d1da;
+  color: #f5f5f5;
 }
 .react-grid-item.react-draggable-dragging .drag-handle {
   cursor: grabbing;
 }
-/* subtle resize handle, amber on hover */
+/* subtle resize handle, lime on hover */
 .layout .react-grid-item > .react-resizable-handle {
   z-index: 5;
 }
 .layout .react-grid-item > .react-resizable-handle::after {
-  border-right-color: #2a3140;
-  border-bottom-color: #2a3140;
+  border-right-color: rgba(255, 255, 255, 0.2);
+  border-bottom-color: rgba(255, 255, 255, 0.2);
   width: 7px;
   height: 7px;
 }
 .layout .react-grid-item:hover > .react-resizable-handle::after {
-  border-right-color: rgba(247, 160, 29, 0.7);
-  border-bottom-color: rgba(247, 160, 29, 0.7);
+  border-right-color: rgba(204, 255, 0, 0.8);
+  border-bottom-color: rgba(204, 255, 0, 0.8);
 }

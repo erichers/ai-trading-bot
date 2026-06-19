@@ -147,13 +147,13 @@ function MiniEquity({ points }: { points: { t: string; equity: number }[] }) {
     const chart = createChart(el, {
       layout: {
         background: { type: ColorType.Solid, color: 'transparent' },
-        textColor: '#8b94a3',
+        textColor: '#A8A8A8',
         fontFamily: 'monospace',
         fontSize: 9,
       },
-      grid: { vertLines: { color: '#1f2530' }, horzLines: { color: '#1f2530' } },
-      rightPriceScale: { borderColor: '#1f2530' },
-      timeScale: { borderColor: '#1f2530', timeVisible: false, secondsVisible: false },
+      grid: { vertLines: { color: 'rgba(255,255,255,0.06)' }, horzLines: { color: 'rgba(255,255,255,0.06)' } },
+      rightPriceScale: { borderColor: 'rgba(255,255,255,0.08)' },
+      timeScale: { borderColor: 'rgba(255,255,255,0.08)', timeVisible: false, secondsVisible: false },
       width: el.clientWidth || 360,
       height: 120,
       autoSize: false,
@@ -162,9 +162,9 @@ function MiniEquity({ points }: { points: { t: string; equity: number }[] }) {
     });
     chartRef.current = chart;
     areaRef.current = chart.addAreaSeries({
-      lineColor: '#f7a01d',
-      topColor: 'rgba(247,160,29,0.25)',
-      bottomColor: 'rgba(247,160,29,0.02)',
+      lineColor: '#CCFF00',
+      topColor: 'rgba(204,255,0,0.25)',
+      bottomColor: 'rgba(204,255,0,0.02)',
       lineWidth: 2,
       priceLineVisible: false,
     });

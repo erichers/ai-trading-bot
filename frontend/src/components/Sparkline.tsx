@@ -20,7 +20,7 @@ export function Sparkline({
     .map((v, i) => `${(i * stepX).toFixed(1)},${(height - ((v - min) / range) * height).toFixed(1)}`)
     .join(' ');
   const up = positive ?? data[data.length - 1] >= data[0];
-  const color = up ? '#1bcf6b' : '#ff4d4d';
+  const color = up ? '#00C805' : '#FF5000';
   return (
     <svg width={width} height={height} className="overflow-visible">
       <polyline points={points} fill="none" stroke={color} strokeWidth={1.25} />

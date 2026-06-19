@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Wand2,
@@ -81,6 +81,17 @@ const MODE_OPTIONS: { value: BotMode; label: string }[] = [
 ];
 
 const STEPS = ['Ticker', 'Entry trigger', 'Action', 'Sizing & risk', 'Review & Save'];
+
+// One-line "what this step is about" education shown under the stepper.
+const STEP_HELP = [
+  'Pick the stock or ETF your bot watches and trades.',
+  'Define the technical condition that fires a signal.',
+  'Choose what to buy when the trigger fires — calls, puts, or shares.',
+  'Size each trade, set your risk, and pick how hands-on the bot is.',
+  'Review the whole strategy, backtest it, then save.',
+];
+
+const ONBOARDED_KEY = 'builder_onboarded';
 
 const MICRO = 'micro-label block mb-1';
 
@@ -212,7 +223,7 @@ function entrySentence(d: Draft, indicatorOpts: { value: string; label: string }
 
 function Stepper({ step, onJump }: { step: number; onJump: (i: number) => void }) {
   return (
-    <div className="flex items-center gap-1 flex-wrap">
+    <div className="flex items-center gap-1.5 flex-wrap">
       {STEPS.map((label, i) => {
         const active = i === step;
         const done = i < step;
@@ -220,9 +231,9 @@ function Stepper({ step, onJump }: { step: number; onJump: (i: number) => void }
           <button
             key={label}
             onClick={() => onJump(i)}
-            className={`flex items-center gap-1.5 px-2 py-1 rounded border text-2xs uppercase tracking-wider transition-colors ${
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-2xs uppercase tracking-wider transition-colors ${
               active
-                ? 'border-amber/50 bg-amber/15 text-amber'
+                ? 'border-transparent bg-amber text-black font-semibold'
                 : done
                   ? 'border-up/40 text-up hover:bg-panel-2'
                   : 'border-border-2 text-text-dim hover:bg-panel-2'
@@ -230,7 +241,7 @@ function Stepper({ step, onJump }: { step: number; onJump: (i: number) => void }
           >
             <span
               className={`w-4 h-4 rounded-full flex items-center justify-center text-[9px] ${
-                active ? 'bg-amber text-bg' : done ? 'bg-up/20 text-up' : 'bg-panel-2 text-muted'
+                active ? 'bg-black/20 text-black' : done ? 'bg-up/20 text-up' : 'bg-panel-2 text-muted'
               }`}
             >
               {done ? <Check size={10} /> : i + 1}
@@ -363,8 +374,14 @@ function ContractPicker({
 //  AI builder ("Build with AI" — Kimi) entry
 // ==========================================================================
 
-function AiBuilder({ onDraft }: { onDraft: (b: Partial<Bot>, explanation: string) => void }) {
-  const [open, setOpen] = useState(false);
+function AiBuilder({
+  onDraft,
+  defaultOpen = false,
+}: {
+  onDraft: (b: Partial<Bot>, explanation: string) => void;
+  defaultOpen?: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
   const [prompt, setPrompt] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -617,10 +634,12 @@ export function BuilderForm({
   initial,
   onSaved,
   onCancel,
+  aiOpen = false,
 }: {
   initial?: Partial<Bot> | null;
   onSaved?: (b: Bot) => void;
   onCancel?: () => void;
+  aiOpen?: boolean;
 }) {
   const [catalog, setCatalog] = useState<IndicatorCatalogItem[]>([]);
   const [draft, setDraft] = useState<Draft>(() =>
@@ -899,19 +918,30 @@ export function BuilderForm({
 
   // ---- render each step ----
   return (
-    <div className="p-3 flex flex-col gap-4 max-w-3xl">
+    <div className="p-4 flex flex-col gap-5 max-w-3xl">
       {/* header: stepper + cancel */}
-      <div className="flex items-center justify-between gap-2 flex-wrap">
-        <Stepper step={step} onJump={jump} />
-        {onCancel && (
-          <button className="btn flex items-center gap-1" onClick={onCancel}>
-            <X size={12} /> Cancel
-          </button>
-        )}
+      <div className="flex flex-col gap-2.5">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <Stepper step={step} onJump={jump} />
+          {onCancel && (
+            <button className="btn flex items-center gap-1.5" onClick={onCancel}>
+              <X size={12} /> Cancel
+            </button>
+          )}
+        </div>
+        {/* Per-step education line */}
+        <div className="flex items-center gap-2 text-xs text-text-dim">
+          <Lightbulb size={13} className="text-amber shrink-0" />
+          <span>
+            <span className="text-text font-medium">Step {step + 1} · {STEPS[step]}</span>
+            {' — '}
+            {STEP_HELP[step]}
+          </span>
+        </div>
       </div>
 
       {/* Build with AI (Kimi) — prominent on the first step */}
-      {step === 0 && <AiBuilder onDraft={applyAiDraft} />}
+      {step === 0 && <AiBuilder onDraft={applyAiDraft} defaultOpen={aiOpen} />}
       {aiExplanation && (
         <div className="rounded border border-amber/30 bg-amber/5 px-3 py-2">
           <div className="micro-label text-amber mb-1 flex items-center gap-1.5">
@@ -1614,6 +1644,104 @@ function Row({ label, value }: { label: string; value: string }) {
 }
 
 // ==========================================================================
+//  Guided onboarding — friendly first-run welcome + "how to start" choices
+// ==========================================================================
+
+function ChoiceCard({
+  icon,
+  title,
+  desc,
+  onClick,
+}: {
+  icon: ReactNode;
+  title: string;
+  desc: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className="group flex flex-col items-start gap-2 text-left rounded-2xl border border-border bg-panel-2 p-5 hover:border-amber/60 hover:bg-amber/5 transition-colors"
+    >
+      <span className="text-3xl leading-none">{icon}</span>
+      <span className="text-base font-semibold text-text group-hover:text-amber transition-colors">
+        {title}
+      </span>
+      <span className="text-xs text-text-dim leading-relaxed">{desc}</span>
+    </button>
+  );
+}
+
+function BuilderOnboarding({
+  onChoice,
+  onSkip,
+}: {
+  onChoice: (c: 'template' | 'ai' | 'scratch') => void;
+  onSkip: (dontShowAgain: boolean) => void;
+}) {
+  return (
+    <div className="flex flex-col items-center justify-center min-h-full px-6 py-10">
+      <div className="w-full max-w-2xl flex flex-col gap-6">
+        {/* Welcome */}
+        <div className="rounded-2xl border border-border bg-panel-2 p-6 flex flex-col gap-3">
+          <div className="flex items-center gap-2.5">
+            <span className="w-9 h-9 rounded-full bg-amber/15 flex items-center justify-center">
+              <Wand2 size={18} className="text-amber" />
+            </span>
+            <h1 className="text-xl font-semibold text-text tracking-tight">Build a trading bot</h1>
+          </div>
+          <p className="text-sm text-text-dim leading-relaxed">
+            A bot watches a ticker for an <span className="text-text">entry trigger</span>. When it
+            fires, the signal passes through an <span className="text-text">AI gate</span> and the{' '}
+            <span className="text-text">risk engine</span> before any order is placed. You stay in
+            control — choose signal-only, semi-auto, or full-auto.
+          </p>
+        </div>
+
+        {/* How to start */}
+        <div className="flex flex-col gap-3">
+          <span className="micro-label">How do you want to start?</span>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <ChoiceCard
+              icon="📚"
+              title="Use a template"
+              desc="Start from a research-backed strategy in the Library and customize it."
+              onClick={() => onChoice('template')}
+            />
+            <ChoiceCard
+              icon="✨"
+              title="Describe with AI"
+              desc="Tell the AI your idea in plain English and it drafts the bot for you."
+              onClick={() => onChoice('ai')}
+            />
+            <ChoiceCard
+              icon="🛠️"
+              title="Build from scratch"
+              desc="Go straight to the guided steps and configure every detail yourself."
+              onClick={() => onChoice('scratch')}
+            />
+          </div>
+        </div>
+
+        {/* Skip */}
+        <div className="flex items-center justify-center gap-4 pt-1">
+          <button className="text-xs text-text-dim hover:text-text transition-colors" onClick={() => onSkip(false)}>
+            Skip for now
+          </button>
+          <span className="text-muted">·</span>
+          <button
+            className="text-xs text-text-dim hover:text-text transition-colors"
+            onClick={() => onSkip(true)}
+          >
+            Don't show this again
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ==========================================================================
 //  Full-page Builder view (list + builder)
 // ==========================================================================
 
@@ -1621,10 +1749,19 @@ export function Builder() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const list = usePolling<Bot[]>(() => api.bots(), 20000, []);
-  const [mode, setMode] = useState<'list' | 'edit'>('list');
+  const [mode, setMode] = useState<'list' | 'onboard' | 'edit'>('list');
   const [editing, setEditing] = useState<Partial<Bot> | null>(null);
+  const [aiOpen, setAiOpen] = useState(false);
 
   const bots = list.data ?? [];
+
+  function hasOnboarded(): boolean {
+    try {
+      return localStorage.getItem(ONBOARDED_KEY) === '1';
+    } catch {
+      return true;
+    }
+  }
 
   // Prefill from the Strategy Library "Customize" action (?from=template).
   useEffect(() => {
@@ -1632,6 +1769,7 @@ export function Builder() {
     const draft = takeTemplatePrefill();
     if (draft) {
       setEditing(draft);
+      setAiOpen(false);
       setMode('edit');
     }
     // clear the query param so a refresh doesn't re-trigger
@@ -1641,18 +1779,58 @@ export function Builder() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // First-run: show the friendly onboarding automatically (once).
+  useEffect(() => {
+    if (searchParams.get('from') === 'template') return;
+    if (!hasOnboarded()) {
+      setEditing(null);
+      setMode('onboard');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   function newBot() {
     setEditing(null);
-    setMode('edit');
+    setAiOpen(false);
+    // New bots get the guided onboarding unless they've dismissed it.
+    setMode(hasOnboarded() ? 'edit' : 'onboard');
   }
   function editBot(b: Bot) {
     setEditing(b);
-    setMode('edit');
+    setAiOpen(false);
+    setMode('edit'); // editing an existing bot skips straight to the form
   }
   function backToList() {
     setMode('list');
     setEditing(null);
+    setAiOpen(false);
     list.refetch();
+  }
+
+  function markOnboarded() {
+    try {
+      localStorage.setItem(ONBOARDED_KEY, '1');
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function handleChoice(c: 'template' | 'ai' | 'scratch') {
+    markOnboarded();
+    if (c === 'template') {
+      navigate('/library');
+      return;
+    }
+    setEditing(null);
+    setAiOpen(c === 'ai');
+    setMode('edit');
+  }
+
+  function handleSkip(dontShowAgain: boolean) {
+    if (dontShowAgain) markOnboarded();
+    setEditing(null);
+    setAiOpen(false);
+    setMode('edit');
   }
 
   return (
@@ -1731,15 +1909,25 @@ export function Builder() {
       <Panel
         title={
           <span className="flex items-center gap-1.5">
-            <Wand2 size={13} /> {mode === 'edit' ? (editing ? 'Edit Bot' : 'New Bot') : 'Builder'}
+            <Wand2 size={13} />{' '}
+            {mode === 'edit'
+              ? editing
+                ? 'Edit Bot'
+                : 'New Bot'
+              : mode === 'onboard'
+                ? 'Get started'
+                : 'Builder'}
           </span>
         }
         bodyClassName="overflow-y-auto"
       >
-        {mode === 'edit' ? (
+        {mode === 'onboard' ? (
+          <BuilderOnboarding onChoice={handleChoice} onSkip={handleSkip} />
+        ) : mode === 'edit' ? (
           <BuilderForm
             key={editing?.id ?? 'new'}
             initial={editing}
+            aiOpen={aiOpen}
             onSaved={() => list.refetch()}
             onCancel={backToList}
           />

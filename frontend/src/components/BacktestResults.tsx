@@ -32,27 +32,27 @@ function EquityChart({ points }: { points: BacktestEquityPoint[] }) {
     if (!el) return;
     const chart = createChart(el, {
       layout: {
-        background: { type: ColorType.Solid, color: '#0d1117' },
-        textColor: '#8b94a3',
+        background: { type: ColorType.Solid, color: '#000000' },
+        textColor: '#A8A8A8',
         fontFamily: 'monospace',
         fontSize: 10,
       },
       grid: {
-        vertLines: { color: '#1f2530' },
-        horzLines: { color: '#1f2530' },
+        vertLines: { color: 'rgba(255,255,255,0.06)' },
+        horzLines: { color: 'rgba(255,255,255,0.06)' },
       },
       crosshair: { mode: CrosshairMode.Normal },
-      rightPriceScale: { borderColor: '#1f2530' },
-      timeScale: { borderColor: '#1f2530', timeVisible: true, secondsVisible: false },
+      rightPriceScale: { borderColor: 'rgba(255,255,255,0.08)' },
+      timeScale: { borderColor: 'rgba(255,255,255,0.08)', timeVisible: true, secondsVisible: false },
       width: el.clientWidth || 600,
       height: el.clientHeight || 280,
       autoSize: false,
     });
     chartRef.current = chart;
     areaRef.current = chart.addAreaSeries({
-      lineColor: '#f7a01d',
-      topColor: 'rgba(247,160,29,0.28)',
-      bottomColor: 'rgba(247,160,29,0.02)',
+      lineColor: '#CCFF00',
+      topColor: 'rgba(204,255,0,0.28)',
+      bottomColor: 'rgba(204,255,0,0.02)',
       lineWidth: 2,
       priceLineVisible: false,
     });
