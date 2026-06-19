@@ -8,8 +8,9 @@ import type {
   Bot,
   Strategy,
 } from '@/api/types';
-import { Spinner, Empty, ErrorState, Badge, Toggle } from '@/components/ui';
+import { Spinner, Empty, ErrorState, Badge, Toggle, HelpTip } from '@/components/ui';
 import { BacktestResults } from '@/components/BacktestResults';
+import { money } from '@/lib/format';
 
 // ---- selectable config (bot or strategy) --------------------------------
 
@@ -44,6 +45,8 @@ export function Backtest() {
   const [selKey, setSelKey] = useState<string>('');
   const [lookback, setLookback] = useState<BacktestLookback>('1W');
   const [timeframe, setTimeframe] = useState<string>(''); // '' = use config default
+  const [accountSize, setAccountSize] = useState<number>(10_000); // starting cash
+  const [cashPerTrade, setCashPerTrade] = useState<number>(1_000); // max bet per trade
 
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -125,10 +128,14 @@ export function Backtest() {
     setError(null);
     setEngineDown(false);
     try {
+      const cash = {
+        account_size: accountSize > 0 ? accountSize : 10_000,
+        cash_per_trade: cashPerTrade > 0 ? cashPerTrade : undefined,
+      };
       const body =
         target.kind === 'bot'
-          ? { bot_id: target.id, lookback: useLb, timeframe: useTf || undefined }
-          : { strategy_id: target.id, lookback: useLb, timeframe: useTf || undefined };
+          ? { bot_id: target.id, lookback: useLb, timeframe: useTf || undefined, ...cash }
+          : { strategy_id: target.id, lookback: useLb, timeframe: useTf || undefined, ...cash };
       const res = await api.backtest(body);
       setResult(res);
     } catch (e) {
@@ -226,6 +233,80 @@ export function Backtest() {
             <span className="micro-label">{selected.mode}</span>
           </div>
         )}
+      </div>
+
+      {/* Money setup — turn % results into real dollars */}
+      <div className="border-t border-border pt-2 flex flex-wrap items-end gap-2.5">
+        <div className="flex flex-col gap-1">
+          <span className="micro-label flex items-center gap-1">
+            Starting cash
+            <HelpTip title="Starting cash">
+              The hypothetical account balance the simulation begins with. All dollar results (net P&L,
+              ending balance, drawdown) are measured against this. It doesn’t touch your real account.
+            </HelpTip>
+          </span>
+          <div className="relative">
+            <span className="absolute left-2 top-1/2 -translate-y-1/2 text-muted text-xs">$</span>
+            <input
+              type="number"
+              min={100}
+              step={1000}
+              className="input w-32 pl-5 py-1.5"
+              value={accountSize}
+              onChange={(e) => setAccountSize(Number(e.target.value))}
+            />
+          </div>
+        </div>
+
+        <div className="flex flex-col gap-1">
+          <span className="micro-label flex items-center gap-1">
+            Cash per trade (max bet)
+            <HelpTip title="Cash per trade">
+              The amount put into each individual trade — the most you’re willing to risk per setup. The
+              simulation deploys this on every entry and tracks the running cash. Smaller = safer and more
+              diversified; larger = more concentrated swings. A common rule is 1–10% of the account.
+            </HelpTip>
+          </span>
+          <div className="relative">
+            <span className="absolute left-2 top-1/2 -translate-y-1/2 text-muted text-xs">$</span>
+            <input
+              type="number"
+              min={1}
+              step={100}
+              className="input w-32 pl-5 py-1.5"
+              value={cashPerTrade}
+              onChange={(e) => setCashPerTrade(Number(e.target.value))}
+            />
+          </div>
+        </div>
+
+        {/* quick presets */}
+        <div className="flex flex-col gap-1">
+          <span className="micro-label">Quick bet size</span>
+          <div className="flex gap-1">
+            {[
+              { label: '1%', frac: 0.01 },
+              { label: '5%', frac: 0.05 },
+              { label: '10%', frac: 0.1 },
+              { label: '25%', frac: 0.25 },
+            ].map((p) => (
+              <button
+                key={p.label}
+                className="btn px-2 py-1"
+                onClick={() => setCashPerTrade(Math.max(1, Math.round(accountSize * p.frac)))}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <span className="text-2xs text-muted ml-auto max-w-[260px] leading-relaxed">
+          Betting <span className="text-text-dim num">{money(cashPerTrade)}</span> per trade —{' '}
+          {accountSize > 0 ? `${((cashPerTrade / accountSize) * 100).toFixed(1)}% of ` : ''}
+          <span className="text-text-dim num">{money(accountSize)}</span>. Results below show the actual
+          cash gained/lost.
+        </span>
       </div>
     </div>
   );

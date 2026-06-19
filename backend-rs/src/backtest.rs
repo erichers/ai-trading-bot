@@ -231,6 +231,10 @@ struct BtConfig {
     stop_pct: f64,
     /// take profit fraction of entry, 0 = disabled
     target_pct: f64,
+    /// starting account cash for the dollar simulation
+    account_size: f64,
+    /// cash deployed per trade (the "max bet" the user is willing to risk per setup)
+    cash_per_trade: f64,
 }
 
 fn resolve_side_right(action: &Value, config: &Value, rules: &[Value]) -> (String, Option<String>, bool, f64) {
@@ -346,6 +350,18 @@ fn build_config(body: &Value, loaded: Option<&Value>) -> Result<BtConfig, ApiErr
         if v > 0.0 { v / 100.0 } else { 0.04 }
     };
 
+    // Dollar simulation inputs (top-level body, with sensible defaults so inline
+    // backtests still get real $ numbers without extra config).
+    let account_size = {
+        let v = num(&body["account_size"], 10_000.0);
+        if v > 0.0 { v } else { 10_000.0 }
+    };
+    let cash_per_trade = {
+        let raw = num(&body["cash_per_trade"], (account_size * 0.10).max(1.0));
+        let v = if raw > 0.0 { raw } else { account_size * 0.10 };
+        v.min(account_size) // can't bet more than the account holds
+    };
+
     Ok(BtConfig {
         name,
         symbols,
@@ -357,6 +373,8 @@ fn build_config(body: &Value, loaded: Option<&Value>) -> Result<BtConfig, ApiErr
         delta,
         stop_pct,
         target_pct,
+        account_size,
+        cash_per_trade,
     })
 }
 
@@ -370,18 +388,25 @@ struct Trade {
     exit_time: String,
     exit_price: f64,
     pnl_pct: f64,
+    /// cash deployed into this trade (the bet)
+    cash_deployed: f64,
+    /// realized dollar P&L = cash_deployed * pnl_pct/100
+    pnl_dollars: f64,
     exit_reason: String,
 }
 
 // ---- metrics ----------------------------------------------------------------
 
-fn metrics(trades: &[Trade]) -> Value {
+fn metrics(trades: &[Trade], account_size: f64) -> Value {
     let num_trades = trades.len();
     if num_trades == 0 {
         return json!({
             "total_return_pct": 0.0, "win_rate": 0.0, "num_trades": 0,
             "wins": 0, "losses": 0, "profit_factor": 0.0, "max_drawdown_pct": 0.0,
             "avg_win_pct": 0.0, "avg_loss_pct": 0.0,
+            "starting_equity": round2(account_size), "ending_equity": round2(account_size),
+            "total_pnl_dollars": 0.0, "total_traded_dollars": 0.0,
+            "avg_win_dollars": 0.0, "avg_loss_dollars": 0.0,
         });
     }
     let mut wins = 0usize;
@@ -390,31 +415,45 @@ fn metrics(trades: &[Trade]) -> Value {
     let mut gross_loss = 0.0;
     let mut win_sum = 0.0;
     let mut loss_sum = 0.0;
-    // Compound equity starting at 100 to measure return + drawdown.
-    let mut equity = 100.0f64;
-    let mut peak = 100.0f64;
-    let mut max_dd = 0.0f64;
+    // Dollar simulation: fixed bet per trade, P&L accrues to cash. Drawdown is
+    // measured on the actual dollar balance curve.
+    let mut cash = account_size;
+    let mut peak = account_size;
+    let mut max_dd_dollars = 0.0f64;
+    let mut total_pnl_dollars = 0.0;
+    let mut total_traded_dollars = 0.0;
+    let mut win_dollars = 0.0;
+    let mut loss_dollars = 0.0;
     for t in trades {
-        let frac = t.pnl_pct / 100.0;
-        equity *= 1.0 + frac;
-        if equity > peak {
-            peak = equity;
+        cash += t.pnl_dollars;
+        total_pnl_dollars += t.pnl_dollars;
+        total_traded_dollars += t.cash_deployed;
+        if cash > peak {
+            peak = cash;
         }
-        let dd = (peak - equity) / peak * 100.0;
-        if dd > max_dd {
-            max_dd = dd;
+        let dd = peak - cash;
+        if dd > max_dd_dollars {
+            max_dd_dollars = dd;
         }
         if t.pnl_pct >= 0.0 {
             wins += 1;
             win_sum += t.pnl_pct;
             gross_win += t.pnl_pct;
+            win_dollars += t.pnl_dollars;
         } else {
             losses += 1;
             loss_sum += t.pnl_pct;
             gross_loss += -t.pnl_pct;
+            loss_dollars += t.pnl_dollars;
         }
     }
-    let total_return_pct = round2(equity - 100.0);
+    let ending_equity = account_size + total_pnl_dollars;
+    let total_return_pct = if account_size > 0.0 {
+        round2(total_pnl_dollars / account_size * 100.0)
+    } else {
+        0.0
+    };
+    let max_drawdown_pct = if peak > 0.0 { round2(max_dd_dollars / peak * 100.0) } else { 0.0 };
     let win_rate = round2(wins as f64 / num_trades as f64 * 100.0);
     let profit_factor = if gross_loss > 0.0 {
         round2(gross_win / gross_loss)
@@ -432,18 +471,24 @@ fn metrics(trades: &[Trade]) -> Value {
         "wins": wins,
         "losses": losses,
         "profit_factor": profit_factor,
-        "max_drawdown_pct": round2(max_dd),
+        "max_drawdown_pct": max_drawdown_pct,
         "avg_win_pct": avg_win_pct,
         "avg_loss_pct": avg_loss_pct,
+        "starting_equity": round2(account_size),
+        "ending_equity": round2(ending_equity),
+        "total_pnl_dollars": round2(total_pnl_dollars),
+        "total_traded_dollars": round2(total_traded_dollars),
+        "avg_win_dollars": if wins > 0 { round2(win_dollars / wins as f64) } else { 0.0 },
+        "avg_loss_dollars": if losses > 0 { round2(loss_dollars / losses as f64) } else { 0.0 },
     })
 }
 
-fn equity_curve(trades: &[Trade]) -> Value {
-    let mut equity = 100.0f64;
-    let mut curve = vec![json!({"t": "start", "equity": 100.0})];
+fn equity_curve(trades: &[Trade], account_size: f64) -> Value {
+    let mut cash = account_size;
+    let mut curve = vec![json!({"t": "start", "equity": round2(account_size)})];
     for t in trades {
-        equity *= 1.0 + t.pnl_pct / 100.0;
-        curve.push(json!({"t": t.exit_time, "equity": round4(equity)}));
+        cash += t.pnl_dollars;
+        curve.push(json!({"t": t.exit_time, "equity": round2(cash)}));
     }
     Value::Array(curve)
 }
@@ -457,6 +502,8 @@ fn trade_json(symbol: &str, right: &Option<String>, t: &Trade) -> Value {
         "exit_time": t.exit_time,
         "exit_price": t.exit_price,
         "pnl_pct": t.pnl_pct,
+        "cash_deployed": round2(t.cash_deployed),
+        "pnl_dollars": round2(t.pnl_dollars),
         "exit_reason": t.exit_reason,
     });
     if let Some(r) = right {
@@ -466,8 +513,8 @@ fn trade_json(symbol: &str, right: &Option<String>, t: &Trade) -> Value {
 }
 
 /// Combine per-symbol trades into one metrics block (equal-weight, all trades pooled).
-fn combine_metrics(all: &[Trade]) -> Value {
-    metrics(all)
+fn combine_metrics(all: &[Trade], account_size: f64) -> Value {
+    metrics(all, account_size)
 }
 
 // ---- public entrypoint ------------------------------------------------------
@@ -519,7 +566,7 @@ pub async fn run_backtest(state: &AppState, body: &Value) -> ApiResult<Value> {
                 per_symbol.push(json!({
                     "symbol": symbol,
                     "error": format!("No bars available: {}", e.detail),
-                    "metrics": metrics(&[]),
+                    "metrics": metrics(&[], cfg.account_size),
                     "equity_curve": [],
                     "trades": [],
                 }));
@@ -531,7 +578,7 @@ pub async fn run_backtest(state: &AppState, body: &Value) -> ApiResult<Value> {
             per_symbol.push(json!({
                 "symbol": symbol,
                 "error": "No bars available for the requested window.",
-                "metrics": metrics(&[]),
+                "metrics": metrics(&[], cfg.account_size),
                 "equity_curve": [],
                 "trades": [],
             }));
@@ -565,8 +612,8 @@ pub async fn run_backtest(state: &AppState, body: &Value) -> ApiResult<Value> {
         all_trades.extend(trades.clone());
         per_symbol.push(json!({
             "symbol": symbol,
-            "metrics": metrics(&trades),
-            "equity_curve": equity_curve(&trades),
+            "metrics": metrics(&trades, cfg.account_size),
+            "equity_curve": equity_curve(&trades, cfg.account_size),
             "trades": trades.iter().map(|t| trade_json(symbol, &cfg.right, t)).collect::<Vec<_>>(),
         }));
     }
@@ -586,7 +633,9 @@ pub async fn run_backtest(state: &AppState, body: &Value) -> ApiResult<Value> {
         "side": cfg.side,
         "right": cfg.right,
         "is_option": cfg.is_option,
-        "combined": combine_metrics(&all_trades),
+        "account_size": round2(cfg.account_size),
+        "cash_per_trade": round2(cfg.cash_per_trade),
+        "combined": combine_metrics(&all_trades, cfg.account_size),
         "per_symbol": per_symbol,
         "note": NOTE,
     }))
@@ -656,6 +705,8 @@ fn simulate_symbol_windowed(cfg: &BtConfig, bars: &[Value], warmup_cut: usize, s
                     exit_time: t,
                     exit_price: round4(exit_price),
                     pnl_pct,
+                    cash_deployed: cfg.cash_per_trade,
+                    pnl_dollars: round2(cfg.cash_per_trade * pnl_pct / 100.0),
                     exit_reason: reason.to_string(),
                 });
                 open_pos = None;
@@ -685,6 +736,8 @@ fn simulate_symbol_windowed(cfg: &BtConfig, bars: &[Value], warmup_cut: usize, s
             exit_time: t,
             exit_price: round4(exit_price),
             pnl_pct,
+            cash_deployed: cfg.cash_per_trade,
+            pnl_dollars: round2(cfg.cash_per_trade * pnl_pct / 100.0),
             exit_reason: "end_of_window".to_string(),
         });
     }

@@ -78,6 +78,40 @@ body {
   }
 }
 
+/* Native <select>: strip the default OS chrome (those double arrows) and draw a
+   single clean chevron so dropdowns match the rest of the dark UI. */
+select.input {
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+  cursor: pointer;
+  padding-right: 1.9rem;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%238b8b8b' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.6rem center;
+  background-size: 0.8rem;
+}
+select.input:hover {
+  border-color: rgba(204, 255, 0, 0.35);
+}
+select.input::-ms-expand {
+  display: none;
+}
+/* Style the dropdown list items to match (supported on most platforms). */
+select.input option {
+  background: #161616;
+  color: #f5f5f5;
+}
+/* Number inputs: hide the spinners (we provide our own +/- where needed). */
+input[type='number']::-webkit-outer-spin-button,
+input[type='number']::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type='number'] {
+  -moz-appearance: textfield;
+}
+
 @keyframes flashUp {
   0% { background-color: rgba(0, 200, 5, 0.22); }
   100% { background-color: transparent; }

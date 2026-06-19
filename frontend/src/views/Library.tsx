@@ -39,6 +39,8 @@ import {
   type StrategyStyle,
   type StrategyCategory,
 } from '@/data/strategyTemplates';
+import { GOAL_BOTS, goalToBot, type GoalBot } from '@/data/goalBots';
+import { Target, AlertTriangle } from 'lucide-react';
 
 // ---- human-readable indicators / rules -----------------------------------
 
@@ -547,6 +549,117 @@ function TriggersReference() {
   );
 }
 
+// ---- goal-based prebuilt bots ---------------------------------------------
+
+function GoalBotCard({
+  goal,
+  onAdd,
+}: {
+  goal: GoalBot;
+  onAdd: (botId: string, name: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [addError, setAddError] = useState<string | null>(null);
+
+  async function add() {
+    setAdding(true);
+    setAddError(null);
+    try {
+      const bot = await api.createBot(goalToBot(goal));
+      onAdd(bot.id, bot.name);
+    } catch (e) {
+      if (e instanceof ApiError && (e.status === 404 || e.status === 503))
+        setAddError('Bot engine starting…');
+      else setAddError((e as Error).message || 'Could not add bot');
+    } finally {
+      setAdding(false);
+    }
+  }
+
+  const ring =
+    goal.tone === 'up'
+      ? 'border-up/40'
+      : goal.tone === 'amber'
+        ? 'border-amber/40'
+        : 'border-down/40';
+
+  return (
+    <div className={`panel flex flex-col border ${ring}`}>
+      <div className="px-3 py-2.5 flex flex-col gap-1.5">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-base">{goal.emoji}</span>
+          <span className="text-sm text-text font-semibold">{goal.name}</span>
+          <Badge tone={goal.tone}>{goal.riskLabel} risk</Badge>
+        </div>
+        <p className="text-xs text-text-dim leading-relaxed">{goal.tagline}</p>
+        <div className="flex items-center gap-1.5 text-2xs">
+          <Target size={11} className="text-amber shrink-0" />
+          <span className="text-muted">Target</span>
+          <span className="text-text font-mono">{goal.target}</span>
+        </div>
+      </div>
+
+      {/* config chips */}
+      <div className="px-3 pb-2 flex flex-wrap gap-1">
+        {goal.params.map((p) => (
+          <span
+            key={p}
+            className="text-2xs px-1.5 py-0.5 rounded bg-bg-2 text-text-dim border border-border-2"
+          >
+            {p}
+          </span>
+        ))}
+      </div>
+
+      {goal.warning && (
+        <div className="mx-3 mb-2 rounded border border-down/40 bg-down/10 px-2.5 py-1.5 flex items-start gap-1.5">
+          <AlertTriangle size={12} className="text-down shrink-0 mt-0.5" />
+          <span className="text-2xs text-down leading-relaxed">{goal.warning}</span>
+        </div>
+      )}
+
+      {open && (
+        <div className="px-3 pb-2 text-2xs text-text-dim leading-relaxed border-t border-border pt-2">
+          {goal.definition}
+        </div>
+      )}
+
+      <div className="px-3 pb-3 pt-1 flex items-center gap-2 flex-wrap mt-auto">
+        <button
+          className="btn-amber flex items-center gap-1.5 py-1.5 px-3"
+          onClick={() => void add()}
+          disabled={adding}
+        >
+          <Plus size={13} /> {adding ? 'Adding…' : 'Add as Bot'}
+        </button>
+        <button className="btn py-1.5 px-3" onClick={() => setOpen((o) => !o)}>
+          {open ? 'Less' : 'How it works'}
+        </button>
+        {addError && <span className="text-down text-2xs micro-label">{addError}</span>}
+      </div>
+    </div>
+  );
+}
+
+function GoalBots({ onAdd }: { onAdd: (botId: string, name: string) => void }) {
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-baseline gap-2 px-1">
+        <span className="text-sm text-text font-semibold uppercase tracking-wide">Start with a goal</span>
+        <span className="text-2xs text-muted">
+          Prebuilt bots tuned to an outcome — added disabled &amp; Signal-only so nothing trades until you turn it on
+        </span>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-2">
+        {GOAL_BOTS.map((g) => (
+          <GoalBotCard key={g.id} goal={g} onAdd={onAdd} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ---- main view ------------------------------------------------------------
 
 export function Library() {
@@ -581,6 +694,14 @@ export function Library() {
             ]}
           />
         </div>
+      </div>
+
+      {/* Goal-based prebuilt bots */}
+      <GoalBots onAdd={(botId, name) => setToast({ text: `Added “${name}” (off)`, botId })} />
+
+      <div className="flex items-baseline gap-2 px-1 pt-1">
+        <span className="text-sm text-text font-semibold uppercase tracking-wide">Or build from a strategy</span>
+        <span className="text-2xs text-muted">Individual research-backed templates — read the edge, backtest, then add</span>
       </div>
 
       {styles.map((style) => (

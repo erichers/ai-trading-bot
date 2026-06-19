@@ -113,36 +113,74 @@ function MetricCard({
   );
 }
 
+// signed dollar string, e.g. +$1,240.00 / -$310.00
+const signedMoney = (v: number | null | undefined): string => {
+  if (v === null || v === undefined || Number.isNaN(v)) return '—';
+  return `${v > 0 ? '+' : v < 0 ? '-' : ''}${money(Math.abs(v))}`;
+};
+
 function MetricsCards({ m }: { m: BacktestMetrics }) {
+  const hasDollars = m.total_pnl_dollars !== undefined;
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-1.5">
-      <MetricCard
-        label="Total Return"
-        value={pct(m.total_return_pct)}
-        tone={colorBySign(m.total_return_pct)}
-      />
-      <MetricCard
-        label="Win Rate"
-        value={`${num(m.win_rate, 1)}%`}
-        sub={`${num(m.wins, 0)}W / ${num(m.losses, 0)}L`}
-      />
-      <MetricCard label="# Trades" value={num(m.num_trades, 0)} />
-      <MetricCard
-        label="Profit Factor"
-        value={Number.isFinite(m.profit_factor) ? num(m.profit_factor, 2) : '∞'}
-        tone={m.profit_factor >= 1 ? 'text-up' : 'text-down'}
-      />
-      <MetricCard
-        label="Max Drawdown"
-        value={pct(-Math.abs(m.max_drawdown_pct))}
-        tone="text-down"
-      />
-      <MetricCard
-        label="Avg Win / Loss"
-        value={pct(m.avg_win_pct)}
-        tone="text-up"
-        sub={pct(m.avg_loss_pct)}
-      />
+    <div className="flex flex-col gap-1.5">
+      {/* Dollars first — actual cash outcome of the simulation. */}
+      {hasDollars && (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+          <MetricCard
+            label="Net P&L ($)"
+            value={signedMoney(m.total_pnl_dollars)}
+            tone={colorBySign(m.total_pnl_dollars ?? 0)}
+            sub={`${pct(m.total_return_pct)} on ${money(m.starting_equity ?? 0)}`}
+          />
+          <MetricCard
+            label="Ending Balance"
+            value={money(m.ending_equity ?? 0)}
+            tone={colorBySign((m.ending_equity ?? 0) - (m.starting_equity ?? 0))}
+            sub={`started ${money(m.starting_equity ?? 0)}`}
+          />
+          <MetricCard
+            label="Total Traded"
+            value={money(m.total_traded_dollars ?? 0)}
+            sub={`${num(m.num_trades, 0)} trades`}
+          />
+          <MetricCard
+            label="Avg Win / Loss ($)"
+            value={signedMoney(m.avg_win_dollars ?? 0)}
+            tone="text-up"
+            sub={signedMoney(m.avg_loss_dollars ?? 0)}
+          />
+        </div>
+      )}
+      {/* Percentage / quality metrics. */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-1.5">
+        <MetricCard
+          label="Total Return"
+          value={pct(m.total_return_pct)}
+          tone={colorBySign(m.total_return_pct)}
+        />
+        <MetricCard
+          label="Win Rate"
+          value={`${num(m.win_rate, 1)}%`}
+          sub={`${num(m.wins, 0)}W / ${num(m.losses, 0)}L`}
+        />
+        <MetricCard label="# Trades" value={num(m.num_trades, 0)} />
+        <MetricCard
+          label="Profit Factor"
+          value={Number.isFinite(m.profit_factor) ? num(m.profit_factor, 2) : '∞'}
+          tone={m.profit_factor >= 1 ? 'text-up' : 'text-down'}
+        />
+        <MetricCard
+          label="Max Drawdown"
+          value={pct(-Math.abs(m.max_drawdown_pct))}
+          tone="text-down"
+        />
+        <MetricCard
+          label="Avg Win / Loss"
+          value={pct(m.avg_win_pct)}
+          tone="text-up"
+          sub={pct(m.avg_loss_pct)}
+        />
+      </div>
     </div>
   );
 }
@@ -167,6 +205,8 @@ function TradesTable({ trades }: { trades: BacktestTrade[] }) {
             <th className="px-2 py-1 micro-label font-normal text-right">Entry Px</th>
             <th className="px-2 py-1 micro-label font-normal">Exit</th>
             <th className="px-2 py-1 micro-label font-normal text-right">Exit Px</th>
+            <th className="px-2 py-1 micro-label font-normal text-right">Bet</th>
+            <th className="px-2 py-1 micro-label font-normal text-right">P&amp;L $</th>
             <th className="px-2 py-1 micro-label font-normal text-right">P&amp;L %</th>
             <th className="px-2 py-1 micro-label font-normal">Reason</th>
           </tr>
@@ -192,7 +232,13 @@ function TradesTable({ trades }: { trades: BacktestTrade[] }) {
                 {dateShort(t.exit_time)} {timeOnly(t.exit_time)}
               </td>
               <td className="px-2 py-1 text-right font-mono">{money(t.exit_price)}</td>
-              <td className={`px-2 py-1 text-right font-mono font-semibold ${colorBySign(t.pnl_pct)}`}>
+              <td className="px-2 py-1 text-right font-mono text-text-dim">
+                {t.cash_deployed !== undefined ? money(t.cash_deployed) : '—'}
+              </td>
+              <td className={`px-2 py-1 text-right font-mono font-semibold ${colorBySign(t.pnl_dollars ?? 0)}`}>
+                {t.pnl_dollars !== undefined ? signedMoney(t.pnl_dollars) : '—'}
+              </td>
+              <td className={`px-2 py-1 text-right font-mono ${colorBySign(t.pnl_pct)}`}>
                 {pct(t.pnl_pct)}
               </td>
               <td className="px-2 py-1 font-mono text-text-dim">{t.exit_reason || '—'}</td>

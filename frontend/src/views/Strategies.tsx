@@ -1,6 +1,19 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Check, Plus, Trash2, X, Zap, Save, FlaskConical, Wand2 } from 'lucide-react';
+import {
+  Check,
+  Plus,
+  Trash2,
+  X,
+  Zap,
+  Save,
+  FlaskConical,
+  Wand2,
+  GraduationCap,
+  ChevronDown,
+  ChevronRight,
+  type LucideIcon,
+} from 'lucide-react';
 import { api } from '@/api/client';
 import type {
   IndicatorCatalogItem,
@@ -10,7 +23,7 @@ import type {
   StrategyRule,
 } from '@/api/types';
 import { num } from '@/lib/format';
-import { Badge, Empty, ErrorState, Panel, Spinner, Toggle } from '@/components/ui';
+import { Badge, Empty, ErrorState, HelpTip, Panel, Spinner, Toggle } from '@/components/ui';
 import { usePolling } from '@/hooks/usePolling';
 
 const TIMEFRAMES = ['1Min', '5Min', '15Min', '1Hour', '1Day'];
@@ -114,7 +127,80 @@ function strategyToDraft(s: Strategy): Draft {
   };
 }
 
-const MICRO = 'micro-label block mb-1';
+// A section label with a step number and an inline "?" explainer.
+function SectionLabel({
+  step,
+  children,
+  title,
+  help,
+}: {
+  step?: number;
+  children: React.ReactNode;
+  title: string;
+  help: React.ReactNode;
+}) {
+  return (
+    <label className="micro-label mb-1 flex items-center gap-1.5">
+      {step !== undefined && (
+        <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-amber/15 text-amber text-[9px] font-bold not-italic">
+          {step}
+        </span>
+      )}
+      {children}
+      <HelpTip title={title}>{help}</HelpTip>
+    </label>
+  );
+}
+
+// Tiny muted hint shown beneath a field label.
+function Hint({ children }: { children: React.ReactNode }) {
+  return <p className="text-2xs text-muted leading-relaxed mb-1">{children}</p>;
+}
+
+const GUIDE_STEPS: { icon: LucideIcon; title: string; body: string }[] = [
+  { icon: GraduationCap, title: 'Name it', body: 'Give the bot a label you’ll recognize, like “QQQ RSI dip”.' },
+  { icon: GraduationCap, title: 'Pick the universe', body: 'Add the ticker(s) it watches. Each is evaluated on its own.' },
+  { icon: GraduationCap, title: 'Choose a timeframe', body: 'The candle size. 1–5 Min = day trading; 1Hour–1Day = swing.' },
+  { icon: GraduationCap, title: 'Set entry rules', body: 'The indicator conditions that must be true to enter, e.g. RSI(14) crosses above 32.' },
+  { icon: GraduationCap, title: 'Add exits & risk', body: 'Where you take profit (target) and bail (stop), plus how much to risk.' },
+  { icon: GraduationCap, title: 'Pick a mode & save', body: 'Signal-only alerts you; Full-auto places paper orders when rules fire. Test, then Save.' },
+];
+
+function HowToGuide() {
+  const [open, setOpen] = useState(true);
+  return (
+    <div className="rounded-lg border border-amber/30 bg-amber/[0.06]">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="w-full flex items-center gap-2 px-3 py-2 text-left"
+      >
+        {open ? (
+          <ChevronDown size={13} className="text-amber shrink-0" />
+        ) : (
+          <ChevronRight size={13} className="text-amber shrink-0" />
+        )}
+        <GraduationCap size={14} className="text-amber shrink-0" />
+        <span className="micro-label text-amber">How to set up a bot</span>
+        <span className="text-2xs text-muted ml-auto">{open ? 'hide' : '6 steps'}</span>
+      </button>
+      {open && (
+        <ol className="px-3 pb-3 pt-0.5 grid sm:grid-cols-2 gap-x-4 gap-y-2">
+          {GUIDE_STEPS.map((s, i) => (
+            <li key={i} className="flex items-start gap-2">
+              <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-amber/15 text-amber text-[9px] font-bold shrink-0 mt-0.5">
+                {i + 1}
+              </span>
+              <span className="text-2xs leading-relaxed">
+                <span className="text-text font-medium">{s.title}.</span>{' '}
+                <span className="text-text-dim">{s.body}</span>
+              </span>
+            </li>
+          ))}
+        </ol>
+      )}
+    </div>
+  );
+}
 
 export function Strategies() {
   const list = usePolling<Strategy[]>(() => api.strategies(), 20000, []);
@@ -417,20 +503,36 @@ export function Strategies() {
           <Empty label="Select a strategy or create a new one" />
         ) : (
           <div className="p-3 flex flex-col gap-4 max-w-3xl">
+            {/* How-to guide */}
+            <HowToGuide />
+
             {/* Name */}
             <div>
-              <label className={MICRO}>Name</label>
+              <SectionLabel
+                step={1}
+                title="Name"
+                help="A label so you can recognize this bot later in the list — e.g. “QQQ RSI dip” or “NVDA momentum”. It has no effect on trading."
+              >
+                Name
+              </SectionLabel>
               <input
                 className="input w-full"
                 value={draft.name}
                 onChange={(e) => patch({ name: e.target.value })}
-                placeholder="Strategy name"
+                placeholder="e.g. QQQ RSI dip"
               />
             </div>
 
             {/* Universe */}
             <div>
-              <label className={MICRO}>Universe</label>
+              <SectionLabel
+                step={2}
+                title="Universe"
+                help="The ticker(s) this bot watches. Add one or more — each symbol is evaluated independently against your rules. Type a symbol and press Enter to add it; click the ✕ to remove."
+              >
+                Universe
+              </SectionLabel>
+              <Hint>Type a symbol (e.g. QQQ, NVDA) and press Enter.</Hint>
               <div className="flex flex-wrap items-center gap-1 p-2 rounded border border-border bg-bg-2">
                 {draft.symbols.map((sym) => (
                   <span
@@ -462,7 +564,13 @@ export function Strategies() {
 
             {/* Timeframe */}
             <div>
-              <label className={MICRO}>Timeframe</label>
+              <SectionLabel
+                step={3}
+                title="Timeframe"
+                help="The candle size your indicators are calculated on. Shorter (1–5 Min) gives more, faster signals — good for day trading but noisier. Longer (1Hour–1Day) gives fewer, steadier signals — good for swing trades."
+              >
+                Timeframe
+              </SectionLabel>
               <select
                 className="input"
                 value={draft.timeframe}
@@ -479,11 +587,28 @@ export function Strategies() {
             {/* Rule builder */}
             <div>
               <div className="flex items-center justify-between mb-1">
-                <label className="micro-label">Rules — indicators to fire</label>
+                <SectionLabel
+                  step={4}
+                  title="Entry rules"
+                  help={
+                    <>
+                      The technical conditions that must be true to trigger an entry. Each rule is{' '}
+                      <b>indicator → comparison → value</b> (e.g. RSI(14) <i>crosses above</i> 32).
+                      Chain several with <b>AND</b> (all must be true) or <b>OR</b> (any can be true).{' '}
+                      <i>crosses above/below</i> fires only on the bar it crosses — cleaner entries than a plain &gt;/&lt;.
+                    </>
+                  }
+                >
+                  Rules — indicators to fire
+                </SectionLabel>
                 <button className="btn flex items-center gap-1" onClick={addRule}>
                   <Plus size={12} /> Rule
                 </button>
               </div>
+              <Hint>
+                Example: <span className="text-text-dim font-mono">RSI(14) crosses above 32</span> — buy
+                when momentum turns up from oversold.
+              </Hint>
               <div className="flex flex-col gap-1">
                 {draft.rules.map((rule, i) => (
                   <div key={i}>
@@ -547,7 +672,13 @@ export function Strategies() {
 
             {/* AI Gate */}
             <div>
-              <label className={MICRO}>AI Gate</label>
+              <SectionLabel
+                title="AI gate"
+                help="An optional second opinion. When ON, after your rules pass the bot only enters if the AI research model’s conviction meets your minimum. Raise it to be more selective; turn it OFF to trade purely on the technical rules above."
+              >
+                AI Gate
+              </SectionLabel>
+              <Hint>Optional. Leave Off to trade on the rules alone.</Hint>
               <div className="flex items-center gap-3">
                 <Toggle
                   value={draft.ai_gate.enabled ? 'on' : 'off'}
@@ -587,10 +718,30 @@ export function Strategies() {
 
             {/* Exits & Risk */}
             <div>
-              <label className={MICRO}>Exits &amp; Risk</label>
+              <SectionLabel
+                step={5}
+                title="Exits & risk"
+                help={
+                  <>
+                    Every trade needs a way out. <b>Stop</b> is where you bail if it goes against you;{' '}
+                    <b>Target</b> is where you take profit. Type <b>percent</b> = a % move,{' '}
+                    <b>atr</b> = multiples of recent volatility (adapts to the stock), <b>R</b> = multiples
+                    of what you’re risking (a 2R target makes twice what the stop risks).
+                  </>
+                }
+              >
+                Exits &amp; Risk
+              </SectionLabel>
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <span className="text-2xs text-muted">Stop type</span>
+                  <span className="text-2xs text-muted flex items-center gap-1">
+                    Stop type
+                    <HelpTip title="Stop type">
+                      How the protective stop is measured. <b>percent</b> = a fixed % below entry.{' '}
+                      <b>atr</b> = a multiple of Average True Range, so the stop widens for volatile names
+                      and tightens for calm ones.
+                    </HelpTip>
+                  </span>
                   <select
                     className="input w-full mt-0.5"
                     value={draft.exits.stop_type}
@@ -603,7 +754,12 @@ export function Strategies() {
                   </select>
                 </div>
                 <div>
-                  <span className="text-2xs text-muted">Stop value</span>
+                  <span className="text-2xs text-muted">
+                    Stop value{' '}
+                    <span className="text-muted/70">
+                      ({draft.exits.stop_type === 'atr' ? '× ATR' : '%'})
+                    </span>
+                  </span>
                   <input
                     type="number"
                     className="input w-full mt-0.5"
@@ -616,7 +772,13 @@ export function Strategies() {
                   />
                 </div>
                 <div>
-                  <span className="text-2xs text-muted">Target type</span>
+                  <span className="text-2xs text-muted flex items-center gap-1">
+                    Target type
+                    <HelpTip title="Target type">
+                      How the profit target is measured. <b>R</b> = multiples of your risk (2R = take twice
+                      what the stop risks — a 2:1 reward:risk). <b>percent</b> = a fixed % above entry.
+                    </HelpTip>
+                  </span>
                   <select
                     className="input w-full mt-0.5"
                     value={draft.exits.target_type}
@@ -629,7 +791,12 @@ export function Strategies() {
                   </select>
                 </div>
                 <div>
-                  <span className="text-2xs text-muted">Target value</span>
+                  <span className="text-2xs text-muted">
+                    Target value{' '}
+                    <span className="text-muted/70">
+                      ({draft.exits.target_type === 'R' ? '× R' : '%'})
+                    </span>
+                  </span>
                   <input
                     type="number"
                     className="input w-full mt-0.5"
@@ -652,15 +819,36 @@ export function Strategies() {
                   }
                 />
                 Trailing stop
+                <HelpTip title="Trailing stop">
+                  When on, the stop follows the price up as the trade moves in your favor — locking in
+                  gains and letting winners run. It never moves backward.
+                </HelpTip>
               </label>
             </div>
 
             {/* Sizing */}
             <div>
-              <label className={MICRO}>Sizing</label>
+              <SectionLabel
+                title="Position sizing"
+                help={
+                  <>
+                    How big each trade is and how many you’ll hold. These caps are your safety rails —
+                    the deterministic risk engine vetoes any order that would breach them.
+                  </>
+                }
+              >
+                Sizing
+              </SectionLabel>
               <div className="grid grid-cols-3 gap-2">
                 <div>
-                  <span className="text-2xs text-muted">Risk / trade %</span>
+                  <span className="text-2xs text-muted flex items-center gap-1">
+                    Risk / trade %
+                    <HelpTip title="Risk per trade %">
+                      The most of your account you’re willing to lose if the stop hits on one trade. This
+                      drives position size: tighter stop → bigger position for the same risk. 1% is a common
+                      conservative default.
+                    </HelpTip>
+                  </span>
                   <input
                     type="number"
                     className="input w-full mt-0.5"
@@ -676,7 +864,13 @@ export function Strategies() {
                   />
                 </div>
                 <div>
-                  <span className="text-2xs text-muted">Max position %</span>
+                  <span className="text-2xs text-muted flex items-center gap-1">
+                    Max position %
+                    <HelpTip title="Max position %">
+                      A hard cap on how much of your account any single position can occupy, regardless of
+                      the risk calc. Prevents one trade from dominating the book.
+                    </HelpTip>
+                  </span>
                   <input
                     type="number"
                     className="input w-full mt-0.5"
@@ -692,7 +886,13 @@ export function Strategies() {
                   />
                 </div>
                 <div>
-                  <span className="text-2xs text-muted">Max positions</span>
+                  <span className="text-2xs text-muted flex items-center gap-1">
+                    Max positions
+                    <HelpTip title="Max positions">
+                      How many open trades this bot can hold at once across its universe. When you’re at the
+                      limit, new setups are vetoed until one closes.
+                    </HelpTip>
+                  </span>
                   <input
                     type="number"
                     className="input w-full mt-0.5"
@@ -709,12 +909,31 @@ export function Strategies() {
 
             {/* Mode */}
             <div>
-              <label className={MICRO}>Mode</label>
+              <SectionLabel
+                step={6}
+                title="Mode"
+                help={
+                  <>
+                    What happens when rules fire. <b>Signal-only</b> just records an alert (no orders).{' '}
+                    <b>Semi-auto</b> stages the order for your one-click confirmation. <b>Full-auto</b>{' '}
+                    places the paper order automatically. Start on Signal-only to watch how it behaves.
+                  </>
+                }
+              >
+                Mode
+              </SectionLabel>
               <Toggle
                 value={draft.mode}
                 onChange={(v) => patch({ mode: v as StrategyMode })}
                 options={MODE_OPTIONS}
               />
+              <Hint>
+                {draft.mode === 'signal'
+                  ? 'Signal-only: alerts you, never places orders.'
+                  : draft.mode === 'semi'
+                    ? 'Semi-auto: stages orders for your confirmation.'
+                    : 'Full-auto: places paper orders automatically when rules fire.'}
+              </Hint>
             </div>
 
             {/* Save / test errors */}

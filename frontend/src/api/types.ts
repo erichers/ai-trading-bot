@@ -722,6 +722,10 @@ export interface BacktestRequest {
   rules?: unknown[];
   action?: unknown;
   ai_gate?: unknown;
+  /** Starting account cash for the dollar simulation (default 10,000). */
+  account_size?: number;
+  /** Cash deployed per trade — the "max bet" per setup (default 10% of account). */
+  cash_per_trade?: number;
 }
 
 export interface BacktestMetrics {
@@ -734,6 +738,13 @@ export interface BacktestMetrics {
   max_drawdown_pct: number;
   avg_win_pct: number;
   avg_loss_pct: number;
+  // Dollar simulation (present on newer backend; optional for safety).
+  starting_equity?: number;
+  ending_equity?: number;
+  total_pnl_dollars?: number;
+  total_traded_dollars?: number;
+  avg_win_dollars?: number;
+  avg_loss_dollars?: number;
 }
 
 export interface BacktestEquityPoint {
@@ -750,6 +761,8 @@ export interface BacktestTrade {
   exit_time: string;
   exit_price: number;
   pnl_pct: number;
+  cash_deployed?: number;
+  pnl_dollars?: number;
   exit_reason: string;
 }
 
@@ -766,6 +779,8 @@ export interface Backtest {
   lookback: BacktestLookback;
   start: string;
   end: string;
+  account_size?: number;
+  cash_per_trade?: number;
   combined: BacktestMetrics;
   per_symbol: BacktestPerSymbol[];
   note?: string;

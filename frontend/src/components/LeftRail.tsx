@@ -46,18 +46,16 @@ const items: NavItem[] = [
 
 export function LeftRail() {
   return (
-    <nav className="flex flex-col w-16 bg-black border-r border-border shrink-0 py-2 gap-0.5">
+    <nav className="flex flex-col w-14 bg-black border-r border-border shrink-0 py-2 gap-1">
       {items.map(({ to, icon: Icon, label }) => (
         <NavLink
           key={to}
           to={to}
           end={to === '/'}
-          title={label}
+          aria-label={label}
           className={({ isActive }) =>
-            `group relative flex flex-col items-center gap-1 py-2 mx-2 rounded-xl transition-colors ${
-              isActive
-                ? 'text-amber bg-amber/10'
-                : 'text-muted hover:text-text hover:bg-panel-2'
+            `group relative flex items-center justify-center py-2.5 mx-2 rounded-xl transition-colors ${
+              isActive ? 'bg-amber/15' : 'hover:bg-amber/10'
             }`
           }
         >
@@ -66,8 +64,15 @@ export function LeftRail() {
               {isActive && (
                 <span className="absolute left-0 top-2 bottom-2 w-0.5 bg-amber rounded-full" />
               )}
-              <Icon size={19} strokeWidth={isActive ? 2.25 : 1.75} />
-              <span className="text-[8px] uppercase tracking-wide leading-none">{label.split(' ')[0]}</span>
+              <Icon
+                size={20}
+                strokeWidth={isActive ? 2.25 : 1.9}
+                className={`transition-colors ${isActive ? 'text-amber' : 'text-amber/65 group-hover:text-amber'}`}
+              />
+              {/* Hover tooltip — label slides in to the right of the icon. */}
+              <span className="pointer-events-none absolute left-full ml-2 z-50 whitespace-nowrap rounded-md border border-amber/30 bg-panel-2 px-2 py-1 text-2xs font-medium text-text opacity-0 shadow-lg shadow-black/60 transition-opacity duration-100 group-hover:opacity-100">
+                {label}
+              </span>
             </>
           )}
         </NavLink>
