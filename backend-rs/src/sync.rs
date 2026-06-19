@@ -633,43 +633,60 @@ async fn sync_watchlist(sqlite: &SqlitePool, mysql: &MySqlPool) -> anyhow::Resul
     Ok(())
 }
 
-/// settings: last-write-wins is hard without a timestamp, so union by key —
-/// insert keys missing on either side. (Values rarely conflict; risk_limits /
-/// worker config are authored on whichever side is active.)
+/// settings: last-write-wins by `updated_at` on the shared `key`. A value edited
+/// on either side (e.g. risk limits, worker config) now propagates to the other,
+/// keeping web (MySQL) and native (SQLite) truly in sync. Rows missing a
+/// timestamp (legacy) only fill gaps — they never overwrite a timestamped value.
 async fn sync_settings(sqlite: &SqlitePool, mysql: &MySqlPool) -> anyhow::Result<()> {
+    use chrono::NaiveDateTime;
     let sq = fetch_all_sqlite(sqlite, "settings").await?;
     let my = fetch_all_mysql(mysql, "settings").await?;
-    let sq_keys: HashSet<String> = sq.iter().map(|r| s(r, "key")).collect();
-    let my_keys: HashSet<String> = my.iter().map(|r| s(r, "key")).collect();
+    let sq_by: HashMap<String, &Value> = sq.iter().map(|r| (s(r, "key"), r)).collect();
+    let my_by: HashMap<String, &Value> = my.iter().map(|r| (s(r, "key"), r)).collect();
 
-    for r in &my {
-        let k = s(r, "key");
-        if k.is_empty() || sq_keys.contains(&k) {
+    // MySQL -> SQLite: insert missing keys, overwrite when MySQL is strictly newer.
+    for (k, r) in &my_by {
+        if k.is_empty() {
             continue;
         }
-        let val = &r["value"];
-        let text = if let Some(t) = val.as_str() { t.to_string() } else { val.to_string() };
-        sqlx::query("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)")
-            .bind(&k)
-            .bind(text)
-            .execute(sqlite)
-            .await?;
-    }
-    for r in &sq {
-        let k = s(r, "key");
-        if k.is_empty() || my_keys.contains(&k) {
-            continue;
-        }
-        let val = &r["value"];
-        let parsed: Value = match val.as_str() {
-            Some(t) => serde_json::from_str(t).unwrap_or(Value::String(t.to_string())),
-            None => val.clone(),
+        let newer = match sq_by.get(k) {
+            None => true,
+            Some(sr) => norm_ts(r, "updated_at") > norm_ts(sr, "updated_at"),
         };
-        sqlx::query("INSERT IGNORE INTO settings (`key`, value) VALUES (?, ?)")
-            .bind(&k)
-            .bind(parsed)
-            .execute(mysql)
-            .await?;
+        if newer {
+            let val = &r["value"];
+            let text = if let Some(t) = val.as_str() { t.to_string() } else { val.to_string() };
+            sqlx::query("INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at")
+                .bind(k)
+                .bind(text)
+                .bind(s(r, "updated_at"))
+                .execute(sqlite)
+                .await?;
+        }
+    }
+    // SQLite -> MySQL: insert missing keys, overwrite when SQLite is strictly newer.
+    for (k, r) in &sq_by {
+        if k.is_empty() {
+            continue;
+        }
+        let newer = match my_by.get(k) {
+            None => true,
+            Some(mr) => norm_ts(r, "updated_at") > norm_ts(mr, "updated_at"),
+        };
+        if newer {
+            let val = &r["value"];
+            let parsed: Value = match val.as_str() {
+                Some(t) => serde_json::from_str(t).unwrap_or(Value::String(t.to_string())),
+                None => val.clone(),
+            };
+            let dt: Option<NaiveDateTime> = parse_naive_dt(&r["updated_at"]);
+            sqlx::query("INSERT INTO settings (`key`, value, updated_at) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value), updated_at = VALUES(updated_at)")
+                .bind(k)
+                .bind(parsed)
+                .bind(dt)
+                .execute(mysql)
+                .await?;
+        }
     }
     Ok(())
 }

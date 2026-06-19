@@ -130,6 +130,8 @@ async fn init_mysql(pool: &sqlx::mysql::MySqlPool) -> anyhow::Result<()> {
     for alter in [
         "ALTER TABLE bots ADD COLUMN last_evaluated_at DATETIME NULL",
         "ALTER TABLE bots ADD COLUMN last_result JSON NULL",
+        // updated_at on settings enables last-write-wins sync across web/native.
+        "ALTER TABLE settings ADD COLUMN updated_at DATETIME NULL",
     ] {
         let _ = sqlx::query(alter).execute(pool).await;
     }
@@ -175,6 +177,8 @@ async fn init_sqlite(pool: &sqlx::sqlite::SqlitePool) -> anyhow::Result<()> {
     for alter in [
         "ALTER TABLE bots ADD COLUMN last_evaluated_at TEXT",
         "ALTER TABLE bots ADD COLUMN last_result TEXT",
+        // updated_at on settings enables last-write-wins sync across web/native.
+        "ALTER TABLE settings ADD COLUMN updated_at TEXT",
     ] {
         let _ = sqlx::query(alter).execute(pool).await;
     }
@@ -286,19 +290,21 @@ pub async fn set_setting(db: &Db, key: &str, value: &Value) -> ApiResult<()> {
     match db {
         Db::My(pool) => {
             sqlx::query(
-                "INSERT INTO settings (`key`, value) VALUES (?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value)",
+                "INSERT INTO settings (`key`, value, updated_at) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value), updated_at = VALUES(updated_at)",
             )
             .bind(key)
             .bind(value)
+            .bind(now_naive())
             .execute(pool)
             .await?;
         }
         Db::Sq(pool) => {
             sqlx::query(
-                "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                "INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
             )
             .bind(key)
             .bind(value.to_string())
+            .bind(now_iso())
             .execute(pool)
             .await?;
         }
