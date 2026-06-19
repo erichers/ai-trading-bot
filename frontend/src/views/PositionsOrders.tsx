@@ -5,6 +5,7 @@ import type { NewOrder, Order, OrderSide, OrderType, Position, TimeInForce } fro
 import { useAppData } from '@/hooks/useAppData';
 import { usePolling } from '@/hooks/usePolling';
 import { Panel, Spinner, Empty, ErrorState, Badge, Toggle } from '@/components/ui';
+import { ContractLabel } from '@/components/ContractLabel';
 import { money, num, pct, signed, colorBySign, timeOnly, timeAgo } from '@/lib/format';
 
 // --- Heuristic for the distance-to-stop/target bar -----------------------
@@ -120,7 +121,9 @@ function PositionsTable({
         <tbody className="tabular-nums">
           {positions.map((p) => (
             <tr key={p.symbol} className="border-b border-border/50 hover:bg-panel-2 group">
-              <td className="px-2 py-1.5 font-mono font-semibold text-text">{p.symbol}</td>
+              <td className="px-2 py-1.5">
+              <ContractLabel symbol={p.symbol} />
+            </td>
               <td className="px-2 py-1.5">
                 <SideBadge side={p.side} />
               </td>
@@ -254,7 +257,9 @@ function OrdersTable() {
                   {timeOnly(o.submitted_at)}
                   <span className="text-muted ml-1 text-2xs">{timeAgo(o.submitted_at)}</span>
                 </td>
-                <td className="px-2 py-1.5 font-mono font-semibold text-text">{o.symbol}</td>
+                <td className="px-2 py-1.5">
+                  <ContractLabel symbol={o.symbol} />
+                </td>
                 <td className="px-2 py-1.5">
                   <SideBadge side={o.side} />
                 </td>

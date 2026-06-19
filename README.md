@@ -8,6 +8,43 @@ It ships in **two forms from one codebase**:
 
 The two stay in sync automatically (SQLite ↔ MySQL).
 
+---
+
+## 📸 Screenshots
+
+> The native macOS app (paper account, live Alpaca data).
+
+### Dashboard — equity, watchlist, live chart, research feed, activity log & bots
+![Dashboard](docs/screenshots/dashboard.png)
+
+### Strategy Library — goal-based prebuilt bots + research-backed templates
+Pick an outcome (Conservative → YOLO) or build from a documented strategy; one-click **Add as Bot**.
+![Library](docs/screenshots/library.png)
+
+### Backtest — real Alpaca history in actual dollars
+Set your starting cash and max bet per trade; get net P&L $, ending balance, equity curve and a per-trade ledger.
+![Backtest](docs/screenshots/backtest.png)
+
+### Risk — prebuilt risk profiles, hard limits, position sizer & kill switch
+![Risk](docs/screenshots/risk.png)
+
+<table>
+<tr>
+<td width="50%"><b>Options Flow</b><br/><img src="docs/screenshots/options-flow.png" alt="Options Flow"/></td>
+<td width="50%"><b>Guided Bot Builder</b><br/><img src="docs/screenshots/builder.png" alt="Builder"/></td>
+</tr>
+<tr>
+<td width="50%"><b>Trades ledger</b> (plain-English contracts)<br/><img src="docs/screenshots/trades.png" alt="Trades"/></td>
+<td width="50%"><b>Positions & Orders</b><br/><img src="docs/screenshots/positions.png" alt="Positions"/></td>
+</tr>
+<tr>
+<td width="50%"><b>AI Research</b> (local Gemma + Kimi)<br/><img src="docs/screenshots/research.png" alt="Research"/></td>
+<td width="50%"><b>Chat over your DB</b> (Vanna-style + RAG)<br/><img src="docs/screenshots/chat.png" alt="Chat"/></td>
+</tr>
+</table>
+
+---
+
 > ⚠️ **Educational project — not financial advice.** Automated trading can lose money rapidly. Paper/backtest results don't guarantee live performance. The AI can be confidently wrong — that's why a deterministic risk engine has veto power over every order. Trade live only with money you can afford to lose.
 
 ---

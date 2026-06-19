@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, Check, Cpu, Palette, ShieldAlert, SlidersHorizontal } from 'lucide-react';
 import { api } from '@/api/client';
 import type { Health } from '@/api/types';
-import { Panel, Spinner, Badge, ErrorState } from '@/components/ui';
+import { Panel, Spinner, Badge, ErrorState, HelpTip } from '@/components/ui';
 import { KillSwitch } from '@/components/KillSwitch';
 import { useAppData } from '@/hooks/useAppData';
 
@@ -326,25 +326,36 @@ export function SettingsView() {
               value={risk.maxDailyLoss}
               step={50}
               onChange={(v) => setField('maxDailyLoss', v)}
+              help="The dollar loss in a single day that should halt new trading. Your most important guardrail — set it to a number you can shrug off, not your whole account."
             />
             <Field
               label="Max position size ($ or %)"
               value={risk.maxPositionSize}
               step={100}
               onChange={(v) => setField('maxPositionSize', v)}
+              help="The largest amount any one position should occupy. Keeps a single trade from becoming the whole account."
             />
             <Field
               label="Max open positions"
               value={risk.maxOpenPositions}
               step={1}
               onChange={(v) => setField('maxOpenPositions', v)}
+              help="How many trades you’re comfortable holding at once. Fewer = easier to watch and less correlated risk."
             />
             <Field
               label="Default risk per trade (%)"
               value={risk.riskPerTrade}
               step={0.25}
               onChange={(v) => setField('riskPerTrade', v)}
+              help="The share of your account you’ll risk on a typical trade (entry → stop). 1% is a common conservative baseline; pros rarely exceed 2%."
             />
+          </div>
+          <div className="px-4 pb-1">
+            <p className="text-2xs text-muted leading-relaxed">
+              These are your <b>personal</b> limits saved in this browser. The bot engine’s hard limits
+              (which actually veto orders) live on the <a className="text-amber hover:underline" href="/risk">Risk</a>{' '}
+              page — set those too, where you can also pick a one-click risk profile.
+            </p>
           </div>
           <div className="px-4 pb-4 flex items-center gap-3">
             <button className="btn-amber" onClick={save}>
@@ -395,15 +406,20 @@ function Field({
   value,
   step,
   onChange,
+  help,
 }: {
   label: string;
   value: number;
   step?: number;
   onChange: (v: string) => void;
+  help?: React.ReactNode;
 }) {
   return (
     <label className="flex flex-col gap-1.5">
-      <span className="micro-label">{label}</span>
+      <span className="micro-label flex items-center gap-1">
+        {label}
+        {help && <HelpTip title={label}>{help}</HelpTip>}
+      </span>
       <input
         className="input"
         type="number"

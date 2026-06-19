@@ -14,77 +14,15 @@ import {
 import type { EvalItem, EvalResult } from '@/api/types';
 import { Badge, Empty, HelpTip } from '@/components/ui';
 import { money, num } from '@/lib/format';
-
-const MONTHS = [
-  'January', 'February', 'March', 'April', 'May', 'June',
-  'July', 'August', 'September', 'October', 'November', 'December',
-];
-
-// Parse an OCC option symbol → its parts. e.g. QQQ260622C00742000
-function parseOcc(occ: string): { right: 'call' | 'put'; year: number; month: number; day: number; strike: number } | null {
-  const m = occ?.match(/^([A-Z]+)(\d{2})(\d{2})(\d{2})([CP])(\d{8})$/);
-  if (!m) return null;
-  return {
-    year: 2000 + parseInt(m[2], 10),
-    month: parseInt(m[3], 10),
-    day: parseInt(m[4], 10),
-    right: m[5] === 'C' ? 'call' : 'put',
-    strike: parseInt(m[6], 10) / 1000,
-  };
-}
-
-// Days-to-expiration from a YYYY-MM-DD (or ISO) string, local-date based.
-function daysToExpiry(expiration: string): number | null {
-  const m = expiration?.match(/(\d{4})-(\d{2})-(\d{2})/);
-  if (!m) return null;
-  const exp = new Date(+m[1], +m[2] - 1, +m[3]);
-  const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  return Math.round((exp.getTime() - today.getTime()) / 86_400_000);
-}
-
-function dteLabel(dte: number | null): string {
-  if (dte === null) return '';
-  if (dte < 0) return 'expired';
-  if (dte === 0) return 'expires today';
-  return `${dte} DTE`;
-}
-
-// Build a plain-English contract line: "June 22 · $742 Call · 3 DTE".
-function humanContract(c: { occ: string; strike: number; expiration: string }, fallbackRight?: 'call' | 'put'): {
-  human: string;
-  dte: number | null;
-  right: 'call' | 'put' | null;
-} | null {
-  const parsed = parseOcc(c.occ);
-  const right = parsed?.right ?? fallbackRight ?? null;
-  const strike = parsed?.strike ?? c.strike;
-
-  // Prefer the explicit expiration field; fall back to the parsed OCC date.
-  let year = parsed?.year, month = parsed?.month, day = parsed?.day;
-  const em = c.expiration?.match(/(\d{4})-(\d{2})-(\d{2})/);
-  if (em) {
-    year = +em[1];
-    month = +em[2];
-    day = +em[3];
-  }
-  if (!month || !day) return null;
-
-  const dte = c.expiration ? daysToExpiry(c.expiration) : daysToExpiry(`${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`);
-  const strikeStr = `$${strike % 1 === 0 ? strike.toFixed(0) : strike}`;
-  const rightStr = right ? right.charAt(0).toUpperCase() + right.slice(1) : 'Option';
-  const parts = [`${MONTHS[month - 1]} ${day}`, `${strikeStr} ${rightStr}`];
-  const d = dteLabel(dte);
-  if (d) parts.push(d);
-  return { human: parts.join(' · '), dte, right };
-}
+import { formatContract } from '@/lib/contracts';
 
 // Actionable "how to fix" for a non-firing symbol. Triggers-not-met is normal
 // (not a problem), so it gets a calm explanation rather than an alarm.
+// A fix can either link to a settings route, or edit THIS bot (`edit: true`).
 interface FixHint {
   tone: 'info' | 'action';
   text: string;
-  cta?: { label: string; to: string };
+  cta?: { label: string; to?: string; edit?: boolean };
 }
 function suggestFix(item: NormItem): FixHint | null {
   if (item.firing) return null;
@@ -96,21 +34,22 @@ function suggestFix(item: NormItem): FixHint | null {
       return {
         tone: 'action',
         text: 'At your max open-positions limit. Close a position to free a slot, or raise the limit in Risk settings.',
-        cta: { label: 'Review positions', to: '/positions' },
+        cta: { label: 'Open Risk settings', to: '/risk' },
       };
     }
     return {
       tone: 'action',
-      text: `Risk blocked this: ${v.message}. Adjust the limit in Risk settings if intended.`,
+      text: `Risk blocked this: ${v.message}. Adjust the limit in Risk settings if this is intended.`,
       cta: { label: 'Open Risk settings', to: '/risk' },
     };
   }
 
-  // 2) AI gate too strict.
+  // 2) AI gate too strict → edit this bot's AI gate.
   if (item.aiGate && item.aiGate.enabled && !item.aiGate.passed) {
     return {
       tone: 'action',
       text: `AI conviction ${num(item.aiGate.conviction, 0)} is below your gate of ${num(item.aiGate.min, 0)}. Lower the AI-gate minimum, or turn the gate off to trade on the technical triggers alone.`,
+      cta: { label: 'Edit bot — adjust AI gate', edit: true },
     };
   }
 
@@ -267,44 +206,50 @@ function PassFail({ ok }: { ok: boolean }) {
   );
 }
 
-function EvalRow({ item }: { item: NormItem }) {
+function EvalRow({ item, onEditBot }: { item: NormItem; onEditBot?: () => void }) {
   const [open, setOpen] = useState(false);
   const fix = suggestFix(item);
   const hasDetail =
     item.triggers.length > 0 || item.aiGate || item.direction || item.contract || item.risk;
   return (
     <div className={`rounded border bg-bg-2 ${item.firing ? 'border-up/40' : 'border-border'}`}>
-      <button
-        onClick={() => hasDetail && setOpen((o) => !o)}
-        className="w-full text-left px-2.5 py-2 flex items-center gap-2"
-      >
-        {hasDetail ? (
-          open ? (
-            <ChevronDown size={12} className="text-muted shrink-0" />
+      <div className="w-full px-2.5 py-2 flex items-center gap-2">
+        <button
+          onClick={() => hasDetail && setOpen((o) => !o)}
+          className="flex items-center gap-2 flex-1 min-w-0 text-left"
+        >
+          {hasDetail ? (
+            open ? (
+              <ChevronDown size={12} className="text-muted shrink-0" />
+            ) : (
+              <ChevronRight size={12} className="text-muted shrink-0" />
+            )
           ) : (
-            <ChevronRight size={12} className="text-muted shrink-0" />
-          )
-        ) : (
-          <span className="w-3 shrink-0" />
-        )}
-        <span className="font-mono text-sm text-text w-14 shrink-0">{item.symbol}</span>
-        <Badge tone={item.firing ? 'up' : 'neutral'}>
-          {item.firing ? 'FIRING' : 'NOT FIRING'}
-        </Badge>
-        <span className={`text-2xs flex-1 truncate ${item.firing ? 'text-up' : 'text-muted'}`}>
-          {item.reason}
-        </span>
-        {!item.firing && fix?.tone === 'action' && (
-          <span className="flex items-center gap-1 text-2xs text-amber shrink-0">
-            <Wrench size={11} /> Fix
+            <span className="w-3 shrink-0" />
+          )}
+          <span className="font-mono text-sm text-text w-14 shrink-0">{item.symbol}</span>
+          <Badge tone={item.firing ? 'up' : 'neutral'}>
+            {item.firing ? 'FIRING' : 'NOT FIRING'}
+          </Badge>
+          <span className={`text-2xs flex-1 truncate ${item.firing ? 'text-up' : 'text-muted'}`}>
+            {item.reason}
           </span>
+        </button>
+        {!item.firing && fix?.tone === 'action' && (
+          <button
+            onClick={() => setOpen(true)}
+            className="flex items-center gap-1 text-2xs text-amber shrink-0 rounded-full border border-amber/40 px-1.5 py-0.5 hover:bg-amber/10 transition-colors"
+            title="Show how to fix this"
+          >
+            <Wrench size={11} /> Fix
+          </button>
         )}
         {item.direction && item.direction.right !== 'skip' && (
           <Badge tone={item.direction.right === 'call' ? 'up' : 'down'}>
             {item.direction.right}
           </Badge>
         )}
-      </button>
+      </div>
 
       {open && hasDetail && (
         <div className="px-2.5 pb-2.5 pt-0.5 flex flex-col gap-2.5 border-t border-border/60">
@@ -446,7 +391,12 @@ function EvalRow({ item }: { item: NormItem }) {
                 </HelpTip>
               </div>
               {(() => {
-                const h = humanContract(item.contract!, item.direction?.right === 'skip' ? undefined : item.direction?.right);
+                const h = formatContract({
+                  occ: item.contract!.occ,
+                  strike: item.contract!.strike,
+                  expiration: item.contract!.expiration,
+                  right: item.direction?.right === 'skip' ? undefined : item.direction?.right,
+                });
                 const tone =
                   h?.right === 'call' ? 'text-up' : h?.right === 'put' ? 'text-down' : 'text-text';
                 return (
@@ -482,14 +432,23 @@ function EvalRow({ item }: { item: NormItem }) {
                 <Wrench size={13} className={`shrink-0 mt-0.5 ${isAction ? 'text-amber' : 'text-muted'}`} />
                 <div className="flex flex-col gap-1.5 flex-1">
                   <span className="text-2xs leading-relaxed text-text-dim">{fix.text}</span>
-                  {fix.cta && (
-                    <Link
-                      to={fix.cta.to}
-                      className="btn-amber self-start flex items-center gap-1 !py-0.5"
-                    >
-                      {fix.cta.label} <ArrowRight size={11} />
-                    </Link>
-                  )}
+                  {fix.cta &&
+                    (fix.cta.edit ? (
+                      <button
+                        onClick={onEditBot}
+                        disabled={!onEditBot}
+                        className="btn-amber self-start flex items-center gap-1 !py-0.5 disabled:opacity-50"
+                      >
+                        {fix.cta.label} <ArrowRight size={11} />
+                      </button>
+                    ) : fix.cta.to ? (
+                      <Link
+                        to={fix.cta.to}
+                        className="btn-amber self-start flex items-center gap-1 !py-0.5"
+                      >
+                        {fix.cta.label} <ArrowRight size={11} />
+                      </Link>
+                    ) : null)}
                 </div>
               </div>
             );
@@ -566,7 +525,14 @@ function summaryBanner(result: EvalResult, items: NormItem[]): string {
   return base;
 }
 
-export function BotEvaluation({ result }: { result: EvalResult }) {
+export function BotEvaluation({
+  result,
+  onEditBot,
+}: {
+  result: EvalResult;
+  /** Called by per-symbol "Fix" CTAs that need to open this bot's editor (e.g. AI gate too strict). */
+  onEditBot?: () => void;
+}) {
   const items = (result.proposals ?? []).map(normalize);
   const firing = items.filter((i) => i.firing).length;
 
@@ -597,7 +563,7 @@ export function BotEvaluation({ result }: { result: EvalResult }) {
       ) : (
         <div className="flex flex-col gap-1.5">
           {items.map((item, i) => (
-            <EvalRow key={`${item.symbol}-${i}`} item={item} />
+            <EvalRow key={`${item.symbol}-${i}`} item={item} onEditBot={onEditBot} />
           ))}
         </div>
       )}

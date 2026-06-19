@@ -12,6 +12,7 @@ import {
   Trash2,
   Zap,
   Play,
+  Square,
   History,
 } from 'lucide-react';
 import { api, ApiError } from '@/api/client';
@@ -51,6 +52,8 @@ function BotRow({
   const [evalError, setEvalError] = useState<string | null>(null);
   const [result, setResult] = useState<EvalResult | null>(null);
   const [lastAt, setLastAt] = useState<string | null>(null);
+  // Inline confirmation (window.confirm() does not work in the native webview).
+  const [confirming, setConfirming] = useState<null | 'run' | 'delete'>(null);
   const navigate = useNavigate();
 
   const right = bot.action?.right;
@@ -81,9 +84,8 @@ function BotRow({
     }
   }
 
-  async function remove(e: React.MouseEvent) {
-    e.stopPropagation();
-    if (!window.confirm(`Delete bot “${bot.name || 'Untitled'}”? This cannot be undone.`)) return;
+  async function remove() {
+    setConfirming(null);
     setBusy(true);
     try {
       await api.deleteBot(bot.id);
@@ -127,14 +129,21 @@ function BotRow({
   }
 
   async function run() {
-    if (!window.confirm(`Run “${bot.name || 'Untitled'}” now and place paper orders for firing setups?`))
-      return;
+    setConfirming(null);
     setRunning(true);
     setEvalError(null);
     try {
       const res = await api.runBot(bot.id, true);
       setResult(res);
       setLastAt(new Date().toISOString());
+      // Make the outcome explicit even when nothing was placed.
+      if (bot.mode === 'signal') {
+        setEvalError(null);
+      } else if ((res.placed?.length ?? 0) === 0) {
+        setEvalError(
+          'Ran — but no orders were placed (no setup passed triggers + AI gate + risk right now). See per-symbol reasons below.',
+        );
+      }
     } catch (e) {
       if (e instanceof ApiError && (e.status === 404 || e.status === 503))
         setEvalError('Bot engine starting…');
@@ -188,12 +197,15 @@ function BotRow({
           {/* inline controls */}
           <div className="flex items-center gap-2 flex-wrap pt-2">
             <Toggle value={bot.mode} onChange={(v) => void setMode(v as BotMode)} options={MODE_OPTIONS} />
+            {/* Start / Stop — the bot's running state. */}
             <button
-              className="btn flex items-center gap-1"
+              className={`btn flex items-center gap-1 ${bot.enabled ? 'text-down' : 'text-up'}`}
               onClick={(e) => void toggleEnabled(e)}
               disabled={busy}
+              title={bot.enabled ? 'Stop this bot (pause evaluation)' : 'Start this bot (resume evaluation)'}
             >
-              {bot.enabled ? 'Disable' : 'Enable'}
+              {bot.enabled ? <Square size={11} /> : <Play size={11} />}
+              {bot.enabled ? 'Stop' : 'Start'}
             </button>
             <button
               className="btn flex items-center gap-1"
@@ -215,7 +227,10 @@ function BotRow({
             </button>
             <button
               className="btn flex items-center gap-1 text-down"
-              onClick={(e) => void remove(e)}
+              onClick={(e) => {
+                e.stopPropagation();
+                setConfirming('delete');
+              }}
               disabled={busy}
             >
               <Trash2 size={11} /> Delete
@@ -228,18 +243,50 @@ function BotRow({
               className="btn flex items-center justify-center gap-1.5 py-1.5"
               onClick={() => void evaluate()}
               disabled={evaluating || running}
+              title="Check which symbols are firing right now (no orders)"
             >
               <Zap size={12} /> {evaluating ? 'Evaluating…' : 'Evaluate now'}
             </button>
             <button
               className="btn flex items-center justify-center gap-1.5 py-1.5 text-amber"
-              onClick={() => void run()}
+              onClick={() => setConfirming('run')}
               disabled={evaluating || running}
-              title="Run and place paper orders for firing setups"
+              title={
+                bot.mode === 'signal'
+                  ? 'Signal-only mode records signals; it will NOT place orders'
+                  : 'Run now and place paper orders for firing setups'
+              }
             >
               <Play size={12} /> {running ? 'Running…' : 'Run (paper)'}
             </button>
           </div>
+
+          {/* inline confirmation bar (works in the native webview) */}
+          {confirming && (
+            <div className="rounded-lg border border-amber/40 bg-amber/10 px-3 py-2 flex items-center gap-2 flex-wrap">
+              <span className="text-2xs text-text-dim flex-1 leading-relaxed">
+                {confirming === 'delete' ? (
+                  <>Delete “{bot.name || 'Untitled'}”? This can’t be undone.</>
+                ) : bot.mode === 'signal' ? (
+                  <>
+                    This bot is in <b>Signal-only</b> mode — running records signals but{' '}
+                    <b>won’t place any orders</b>. Switch to Semi/Auto to place paper orders. Run anyway?
+                  </>
+                ) : (
+                  <>Run now and place <b>paper</b> orders for any firing setups?</>
+                )}
+              </span>
+              <button
+                className={confirming === 'delete' ? 'btn-danger' : 'btn-amber'}
+                onClick={() => (confirming === 'delete' ? void remove() : void run())}
+              >
+                {confirming === 'delete' ? 'Delete' : 'Run'}
+              </button>
+              <button className="btn" onClick={() => setConfirming(null)}>
+                Cancel
+              </button>
+            </div>
+          )}
 
           {lastAt && (
             <div className="text-2xs text-muted">Last evaluated {timeAgo(lastAt)}</div>
@@ -249,7 +296,7 @@ function BotRow({
           {evaluating || running ? (
             <Spinner label={running ? 'running' : 'evaluating'} />
           ) : result ? (
-            <BotEvaluation result={result} />
+            <BotEvaluation result={result} onEditBot={() => onEdit(bot)} />
           ) : (
             <div className="text-2xs text-muted micro-label py-1">
               Hit “Evaluate now” to see which symbols are firing and why.

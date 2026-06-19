@@ -32,6 +32,7 @@ import { useBars } from '@/hooks/useBars';
 import { CandleChart, type Overlay } from '@/components/CandleChart';
 import { Sparkline } from '@/components/Sparkline';
 import { BotSetup } from '@/components/BotSetup';
+import { ContractLabel } from '@/components/ContractLabel';
 import { Panel, Spinner, Empty, ErrorState, Badge, Toggle } from '@/components/ui';
 import {
   money,
@@ -450,7 +451,7 @@ function ActivityLog() {
                 >
                   {row.order.side}
                 </span>
-                <span className="font-mono text-text w-14">{row.order.symbol}</span>
+                <ContractLabel symbol={row.order.symbol} className="text-2xs flex-1 min-w-0 truncate" />
                 <span className="num text-text-dim w-10 text-right">{row.order.qty}</span>
                 <span className="text-muted uppercase text-2xs w-14">{row.order.type}</span>
                 <span className="ml-auto">
@@ -473,7 +474,7 @@ function ActivityLog() {
                 >
                   {row.event.side}
                 </span>
-                <span className="font-mono text-text w-14">{row.event.symbol}</span>
+                <ContractLabel symbol={row.event.symbol} className="text-2xs w-28 shrink-0 truncate" />
                 <span className="num text-text-dim w-10 text-right">{row.event.qty}</span>
                 <span
                   className={`truncate flex-1 text-2xs ${

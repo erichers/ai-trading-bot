@@ -42,6 +42,7 @@ import { money, num, pct } from '@/lib/format';
 import { takeTemplatePrefill } from '@/lib/templatePrefill';
 import { Badge, Empty, ErrorState, HelpTip, Panel, Spinner, Toggle } from '@/components/ui';
 import { indicatorHint, ruleWarning } from '@/lib/builderHints';
+import { formatContract, friendlyExpiry, daysToExpiry, dteLabel } from '@/lib/contracts';
 import { BacktestResults } from '@/components/BacktestResults';
 import { BotEvaluation } from '@/components/BotEvaluation';
 import { Markdown } from '@/components/Markdown';
@@ -310,7 +311,7 @@ function ContractPicker({
       <div className="flex items-center justify-between px-2 py-1.5 border-b border-border">
         <span className="text-2xs text-muted">
           {data.symbol} @ <span className="num text-text-dim">{money(data.underlying_price)}</span>{' '}
-          · exp <span className="text-text-dim">{data.expiration}</span>
+          · exp <span className="text-text-dim">{friendlyExpiry(data.expiration)} · {dteLabel(daysToExpiry(data.expiration))}</span>
         </span>
         <button className="btn flex items-center gap-1 !py-0.5" onClick={() => void load()}>
           <RefreshCw size={11} /> Refresh
@@ -1298,9 +1299,14 @@ export function BuilderForm({
 
               {selectedContract && draft.action.contract_symbol && (
                 <div className="rounded border border-amber/40 bg-amber/10 px-3 py-2 text-sm text-amber">
-                  Selected: {draft.primary} {selectedContract.expiration}{' '}
-                  {money(selectedContract.strike)}
-                  {optionRight === 'call' ? 'C' : 'P'} @ {money(selectedContract.mid)} mid, Δ
+                  Selected: <span className="font-semibold">{draft.primary}</span>{' '}
+                  {formatContract({
+                    occ: selectedContract.occ_symbol,
+                    strike: selectedContract.strike,
+                    expiration: selectedContract.expiration,
+                    right: optionRight === 'put' ? 'put' : 'call',
+                  })?.human ?? `${selectedContract.expiration} ${money(selectedContract.strike)}`}{' '}
+                  · {money(selectedContract.mid)} mid · ≈ {money(selectedContract.mid * 100)}/contract · Δ{' '}
                   {num(selectedContract.delta)}
                 </div>
               )}

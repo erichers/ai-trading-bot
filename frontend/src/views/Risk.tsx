@@ -17,7 +17,8 @@ import type {
 } from '@/api/types';
 import { usePolling } from '@/hooks/usePolling';
 import { useAppData } from '@/hooks/useAppData';
-import { Panel, Spinner, Empty, ErrorState, Badge } from '@/components/ui';
+import { Panel, Spinner, Empty, ErrorState, Badge, HelpTip } from '@/components/ui';
+import { ContractLabel } from '@/components/ContractLabel';
 import { money, moneyCompact, num, pct, signed, colorBySign, timeOnly, timeAgo } from '@/lib/format';
 
 // ---- helpers -------------------------------------------------------------
@@ -138,15 +139,136 @@ function StatusStrip() {
 
 // ---- limits editor + kill switch -----------------------------------------
 
-const LIMIT_FIELDS: { key: keyof RiskLimits; label: string; step: number }[] = [
-  { key: 'max_position_pct', label: 'Max position (% equity)', step: 0.5 },
-  { key: 'max_open_positions', label: 'Max open positions', step: 1 },
-  { key: 'max_daily_loss_pct', label: 'Max daily loss (%)', step: 0.5 },
-  { key: 'max_per_trade_risk_pct', label: 'Max per-trade risk (%)', step: 0.25 },
-  { key: 'max_concentration_pct', label: 'Max concentration (%)', step: 1 },
-  { key: 'min_price', label: 'Min price ($)', step: 0.5 },
-  { key: 'default_risk_per_trade_pct', label: 'Default risk/trade (%)', step: 0.25 },
-  { key: 'skip_first_minutes', label: 'Skip first minutes', step: 1 },
+const LIMIT_FIELDS: { key: keyof RiskLimits; label: string; step: number; help: string }[] = [
+  {
+    key: 'max_position_pct',
+    label: 'Max position (% equity)',
+    step: 0.5,
+    help: 'The largest any single position may be, as a % of account equity. A hard cap that keeps one trade from dominating the book — orders that would exceed it are vetoed.',
+  },
+  {
+    key: 'max_open_positions',
+    label: 'Max open positions',
+    step: 1,
+    help: 'How many positions can be open at once across all bots. At the limit, new entries are blocked until one closes (the “max_open_positions” veto you may see on bots).',
+  },
+  {
+    key: 'max_daily_loss_pct',
+    label: 'Max daily loss (%)',
+    step: 0.5,
+    help: 'The daily loss that trips the circuit breaker and blocks all new entries for the rest of the day. Your single most important guardrail against a bad day spiralling.',
+  },
+  {
+    key: 'max_per_trade_risk_pct',
+    label: 'Max per-trade risk (%)',
+    step: 0.25,
+    help: 'The ceiling on how much a single trade may risk (entry → stop) as a % of equity. Caps the position size the sizer will allow per setup.',
+  },
+  {
+    key: 'max_concentration_pct',
+    label: 'Max concentration (%)',
+    step: 1,
+    help: 'The most exposure allowed to one underlying across all positions — prevents stacking five correlated bets on the same name.',
+  },
+  {
+    key: 'min_price',
+    label: 'Min price ($)',
+    step: 0.5,
+    help: 'Skip symbols trading below this price. Filters out illiquid penny names with wide spreads where slippage eats any edge.',
+  },
+  {
+    key: 'default_risk_per_trade_pct',
+    label: 'Default risk/trade (%)',
+    step: 0.25,
+    help: 'The risk % used to size a trade when a bot doesn’t specify its own. 1% is a common conservative baseline.',
+  },
+  {
+    key: 'skip_first_minutes',
+    label: 'Skip first minutes',
+    step: 1,
+    help: 'Ignore signals in the first N minutes after the open, when spreads are wide and prices whipsaw. Higher = safer but you miss early momentum.',
+  },
+];
+
+// Prebuilt risk profiles — one-click presets that fill the limits (you still
+// review + Save). Values progress from capital-preservation to all-out.
+interface RiskProfile {
+  id: string;
+  name: string;
+  emoji: string;
+  tone: 'up' | 'amber' | 'down';
+  blurb: string;
+  limits: Partial<RiskLimits>;
+}
+const RISK_PROFILES: RiskProfile[] = [
+  {
+    id: 'conservative',
+    name: 'Conservative',
+    emoji: '🛡️',
+    tone: 'up',
+    blurb: 'Protect capital first. Tiny positions, a 2% daily stop, few open trades.',
+    limits: {
+      max_position_pct: 15,
+      max_open_positions: 3,
+      max_daily_loss_pct: 2,
+      max_per_trade_risk_pct: 0.5,
+      max_concentration_pct: 20,
+      min_price: 5,
+      default_risk_per_trade_pct: 0.5,
+      skip_first_minutes: 15,
+    },
+  },
+  {
+    id: 'balanced',
+    name: 'Balanced',
+    emoji: '⚖️',
+    tone: 'amber',
+    blurb: 'Sensible middle ground — real growth with recoverable drawdowns.',
+    limits: {
+      max_position_pct: 25,
+      max_open_positions: 5,
+      max_daily_loss_pct: 4,
+      max_per_trade_risk_pct: 1,
+      max_concentration_pct: 30,
+      min_price: 3,
+      default_risk_per_trade_pct: 1,
+      skip_first_minutes: 5,
+    },
+  },
+  {
+    id: 'aggressive',
+    name: 'Aggressive',
+    emoji: '🚀',
+    tone: 'down',
+    blurb: 'Bigger size, wider daily stop, more concurrent trades. Expect swings.',
+    limits: {
+      max_position_pct: 50,
+      max_open_positions: 8,
+      max_daily_loss_pct: 8,
+      max_per_trade_risk_pct: 3,
+      max_concentration_pct: 50,
+      min_price: 1,
+      default_risk_per_trade_pct: 3,
+      skip_first_minutes: 1,
+    },
+  },
+  {
+    id: 'yolo',
+    name: 'YOLO',
+    emoji: '🎰',
+    tone: 'down',
+    blurb: 'Guardrails almost off — full size, one underlying, 25% daily stop. Danger.',
+    limits: {
+      max_position_pct: 100,
+      max_open_positions: 10,
+      max_daily_loss_pct: 25,
+      max_per_trade_risk_pct: 10,
+      max_concentration_pct: 100,
+      min_price: 0.5,
+      default_risk_per_trade_pct: 10,
+      skip_first_minutes: 0,
+    },
+  },
 ];
 
 function toNum(v: string, fallback: number): number {
@@ -187,6 +309,11 @@ function LimitsEditor() {
   const setField = (key: keyof RiskLimits, raw: string) => {
     setSaved(false);
     setDraft((d) => (d ? { ...d, [key]: raw === '' ? 0 : toNum(raw, d[key] as number) } : d));
+  };
+
+  const applyProfile = (p: RiskProfile) => {
+    setSaved(false);
+    setDraft((d) => (d ? { ...d, ...p.limits } : d));
   };
 
   const save = async () => {
@@ -255,10 +382,46 @@ function LimitsEditor() {
         </span>
       }
     >
+      {/* Prebuilt risk profiles — one-click presets */}
+      <div className="px-4 pt-4">
+        <div className="flex items-center gap-1.5 mb-2">
+          <span className="micro-label">Start from a profile</span>
+          <HelpTip title="Risk profiles">
+            One-click presets that fill every limit below to match a risk appetite. They <b>fill the form</b> —
+            review the values and hit <b>Save</b> to apply. Tighter profiles veto more; looser ones let more
+            through.
+          </HelpTip>
+        </div>
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
+          {RISK_PROFILES.map((p) => (
+            <button
+              key={p.id}
+              onClick={() => applyProfile(p)}
+              className={`text-left rounded-lg border px-2.5 py-2 transition-colors hover:bg-panel-2 ${
+                p.tone === 'up'
+                  ? 'border-up/40'
+                  : p.tone === 'amber'
+                    ? 'border-amber/40'
+                    : 'border-down/40'
+              }`}
+            >
+              <div className="flex items-center gap-1.5">
+                <span>{p.emoji}</span>
+                <span className="text-xs font-semibold text-text">{p.name}</span>
+              </div>
+              <p className="text-2xs text-muted leading-relaxed mt-1">{p.blurb}</p>
+            </button>
+          ))}
+        </div>
+      </div>
+
       <div className="p-4 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-4">
-        {LIMIT_FIELDS.map(({ key, label, step }) => (
+        {LIMIT_FIELDS.map(({ key, label, step, help }) => (
           <label key={key} className="flex flex-col gap-1.5">
-            <span className="micro-label">{label}</span>
+            <span className="micro-label flex items-center gap-1">
+              {label}
+              <HelpTip title={label}>{help}</HelpTip>
+            </span>
             <input
               className="input"
               type="number"
@@ -386,9 +549,16 @@ function PositionSizer() {
       right={<Calculator size={12} className="text-muted" />}
     >
       <div className="p-4 flex flex-col gap-4">
+        <p className="text-2xs text-muted leading-relaxed">
+          Work out how many shares/contracts to buy so a stop-out loses exactly your chosen risk %.
+          Enter your planned entry and stop price; we size it against your account.
+        </p>
         <div className="grid grid-cols-3 gap-3">
           <label className="flex flex-col gap-1.5">
-            <span className="micro-label">Entry ($)</span>
+            <span className="micro-label flex items-center gap-1">
+              Entry ($)
+              <HelpTip title="Entry price">The price you plan to buy at.</HelpTip>
+            </span>
             <input
               className="input"
               type="number"
@@ -400,7 +570,13 @@ function PositionSizer() {
             />
           </label>
           <label className="flex flex-col gap-1.5">
-            <span className="micro-label">Stop ($)</span>
+            <span className="micro-label flex items-center gap-1">
+              Stop ($)
+              <HelpTip title="Stop price">
+                Where you’d exit for a loss. The gap from entry to stop is your per-share risk — a tighter
+                stop allows a bigger position for the same dollar risk.
+              </HelpTip>
+            </span>
             <input
               className="input"
               type="number"
@@ -412,7 +588,12 @@ function PositionSizer() {
             />
           </label>
           <label className="flex flex-col gap-1.5">
-            <span className="micro-label">Risk % (opt)</span>
+            <span className="micro-label flex items-center gap-1">
+              Risk % (opt)
+              <HelpTip title="Risk %">
+                % of equity to risk on this trade. Leave blank to use your default risk/trade limit.
+              </HelpTip>
+            </span>
             <input
               className="input"
               type="number"
@@ -487,7 +668,9 @@ function EventsLog() {
                   {timeOnly(e.created_at)}
                   <span className="text-muted ml-1 text-2xs">{timeAgo(e.created_at)}</span>
                 </td>
-                <td className="px-2 py-1.5 font-mono font-semibold text-text">{e.symbol}</td>
+                <td className="px-2 py-1.5">
+                  <ContractLabel symbol={e.symbol} />
+                </td>
                 <td className="px-2 py-1.5 whitespace-nowrap">
                   <span className={e.side === 'buy' ? 'text-up' : 'text-down'}>
                     {(e.side || '').toUpperCase()}

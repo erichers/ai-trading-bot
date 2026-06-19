@@ -4,6 +4,7 @@ import { api } from '@/api/client';
 import type { Trade, TradeStatusFilter } from '@/api/types';
 import { usePolling } from '@/hooks/usePolling';
 import { Panel, Spinner, Empty, ErrorState, Badge, Toggle } from '@/components/ui';
+import { ContractLabel } from '@/components/ContractLabel';
 import { money, num, timeOnly, timeAgo } from '@/lib/format';
 
 // ---- helpers -------------------------------------------------------------
@@ -203,7 +204,9 @@ export function Trades() {
                     {ts ? timeOnly(ts) : '—'}
                     {ts && <span className="text-muted ml-1 text-2xs">{timeAgo(ts)}</span>}
                   </td>
-                  <td className="px-2 py-1 font-mono font-semibold text-text">{t.symbol}</td>
+                  <td className="px-2 py-1">
+                    <ContractLabel symbol={t.symbol} />
+                  </td>
                   <td className="px-2 py-1">
                     <AssetClassBadge assetClass={t.asset_class} />
                   </td>

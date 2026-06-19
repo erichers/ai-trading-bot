@@ -3,6 +3,7 @@ import { Activity } from 'lucide-react';
 import { api } from '@/api/client';
 import type { OptionContract, OptionExpiration, OptionsFlow } from '@/api/types';
 import { money, num, compact } from '@/lib/format';
+import { friendlyExpiry, daysToExpiry, dteLabel } from '@/lib/contracts';
 import { Panel, Spinner, Empty, ErrorState, Badge, Toggle } from '@/components/ui';
 import { TickerSearch } from '@/components/TickerSearch';
 import { useSymbol } from '@/hooks/useSymbol';
@@ -153,7 +154,7 @@ function ChainTable({ chain }: { chain: OptionContract[] }) {
                     isAtm ? 'text-amber' : 'text-text'
                   }`}
                 >
-                  {num(r.strike, r.strike % 1 === 0 ? 0 : 1)}
+                  ${num(r.strike, r.strike % 1 === 0 ? 0 : 1)}
                 </td>
                 <SideCells c={r.put} side="put" />
                 <GreekCells c={r.put} />
@@ -268,7 +269,7 @@ function UnusualTable({ flow }: { flow: OptionsFlow }) {
                   hot ? 'bg-amber/10 ring-1 ring-inset ring-amber/40' : 'hover:bg-panel-2/60'
                 }`}
               >
-                <td className="px-2 py-1 text-right text-text">{num(u.strike, u.strike % 1 === 0 ? 0 : 1)}</td>
+                <td className="px-2 py-1 text-right text-text">${num(u.strike, u.strike % 1 === 0 ? 0 : 1)}</td>
                 <td className="px-2 py-1">
                   <span className={u.type === 'call' ? 'text-up' : 'text-down'}>
                     {u.type.toUpperCase()}
@@ -357,14 +358,19 @@ export function OptionsFlowView() {
             value={expiration}
             onChange={(e) => setExpiration(e.target.value)}
             disabled={expirations.length === 0}
-            className="bg-bg-2 border border-border rounded px-2 py-1 text-xs font-mono text-text outline-none focus:border-amber/50 disabled:opacity-50"
+            className="input text-xs py-1 disabled:opacity-50 min-w-[220px]"
           >
             {expirations.length === 0 && <option value="">{expError ? 'unavailable' : '—'}</option>}
-            {expirations.map((e) => (
-              <option key={e.date} value={e.date}>
-                {e.date} {e.type === 'weekly' ? '(W)' : '(M)'}
-              </option>
-            ))}
+            {expirations.map((e) => {
+              const dte = daysToExpiry(e.date);
+              return (
+                <option key={e.date} value={e.date}>
+                  {friendlyExpiry(e.date)}
+                  {dte !== null ? ` · ${dteLabel(dte)}` : ''}
+                  {e.type === 'weekly' ? ' · Weekly' : ' · Monthly'}
+                </option>
+              );
+            })}
           </select>
         </div>
       </div>
@@ -379,8 +385,14 @@ export function OptionsFlowView() {
           right={
             chain.error ? (
               <Badge tone="down">stale</Badge>
-            ) : chain.data ? (
-              <span className="text-2xs text-muted font-mono">{expiration || '—'}</span>
+            ) : chain.data && expiration ? (
+              <span className="text-2xs text-text-dim">
+                {friendlyExpiry(expiration)}
+                <span className="text-muted">
+                  {' · '}
+                  {dteLabel(daysToExpiry(expiration))}
+                </span>
+              </span>
             ) : null
           }
         >
