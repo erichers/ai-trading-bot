@@ -5,6 +5,7 @@ import type { Account, Order } from '@/api/types';
 import { usePolling } from '@/hooks/usePolling';
 import { Panel, Spinner, Empty, ErrorState, Badge, HelpTip } from '@/components/ui';
 import { ContractLabel } from '@/components/ContractLabel';
+import { isOccSymbol } from '@/lib/contracts';
 import { money, num, timeOnly, timeAgo } from '@/lib/format';
 
 function Stat({ label, value, sub, tone, help }: { label: string; value: string; sub?: string; tone?: string; help?: React.ReactNode }) {
@@ -25,9 +26,14 @@ export function BuyingPower() {
 
   // Margin multiplier ≈ buying power / equity (1× cash, ~2× reg-T, ~4× PDT intraday).
   const multiplier = acct && acct.equity > 0 ? acct.buying_power / acct.equity : 0;
+  // Approx buying power reserved by open buy orders. Options reserve premium ×100
+  // per contract; limit orders use the limit price (market orders are unknown → 0).
   const reservedByOrders = orders
     .filter((o) => o.side === 'buy')
-    .reduce((s, o) => s + (o.limit_price ?? 0) * (o.qty || 0), 0);
+    .reduce((s, o) => {
+      const mult = isOccSymbol(o.symbol) ? 100 : 1;
+      return s + (o.limit_price ?? 0) * (o.qty || 0) * mult;
+    }, 0);
 
   return (
     <div className="h-full overflow-auto p-3">

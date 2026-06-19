@@ -84,6 +84,7 @@ function StatCell({
   to?: string;
   help?: React.ReactNode;
 }) {
+  const navigateTo = useNavigate();
   const inner = (
     <>
       <span className="micro-label flex items-center gap-1">
@@ -96,11 +97,18 @@ function StatCell({
     </>
   );
   const cls = 'flex flex-col justify-center px-3 py-1.5 border-r border-border last:border-r-0 flex-1';
+  // Use a div+navigate (not an <a>) so the HelpTip button isn't nested in an anchor.
   if (to) {
     return (
-      <Link to={to} className={`group ${cls} hover:bg-panel-2 transition-colors`}>
+      <div
+        role="link"
+        tabIndex={0}
+        onClick={() => navigateTo(to)}
+        onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && navigateTo(to)}
+        className={`group cursor-pointer ${cls} hover:bg-panel-2 transition-colors`}
+      >
         {inner}
-      </Link>
+      </div>
     );
   }
   return <div className={cls}>{inner}</div>;

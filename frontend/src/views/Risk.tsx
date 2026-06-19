@@ -32,8 +32,12 @@ function utilTone(p: number): { bar: string; text: string } {
 }
 
 function UtilBar({ label, value, help }: { label: string; value: number; help?: React.ReactNode }) {
-  const v = Number.isFinite(value) ? Math.max(0, value) : 0;
+  // Backend can report negative (e.g. buying power over-extended) or >100 — clamp
+  // the bar and show a sane label rather than a confusing "-245%".
+  const raw = Number.isFinite(value) ? value : 0;
+  const v = Math.max(0, Math.min(raw, 100));
   const tone = utilTone(v);
+  const labelTxt = raw < 0 ? 'n/a' : raw > 100 ? '100%+' : pct(v, 0);
   return (
     <div className="flex flex-col gap-1">
       <div className="flex items-center justify-between">
@@ -41,10 +45,10 @@ function UtilBar({ label, value, help }: { label: string; value: number; help?: 
           {label}
           {help && <HelpTip title={label}>{help}</HelpTip>}
         </span>
-        <span className={`num text-xs ${tone.text}`}>{pct(v, 0)}</span>
+        <span className={`num text-xs ${tone.text}`}>{labelTxt}</span>
       </div>
       <div className="h-2 bg-bg-2 rounded overflow-hidden">
-        <div className={`h-full ${tone.bar} transition-all`} style={{ width: `${Math.min(v, 100)}%` }} />
+        <div className={`h-full ${tone.bar} transition-all`} style={{ width: `${v}%` }} />
       </div>
     </div>
   );

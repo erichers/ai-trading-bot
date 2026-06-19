@@ -17,8 +17,12 @@ const PERIODS = [
   { value: 'all', label: 'All' },
 ];
 
-function fmtDate(sec: number): string {
-  return new Date(sec * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' });
+function fmtDate(sec: number, intraday = false): string {
+  const d = new Date(sec * 1000);
+  if (intraday) {
+    return d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+  }
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' });
 }
 
 function Stat({ label, value, sub, tone, help }: { label: string; value: string; sub?: string; tone?: string; help?: React.ReactNode }) {
@@ -35,6 +39,7 @@ export function Pnl() {
   const [period, setPeriod] = useState('1M');
   const histQ = usePolling<PortfolioHistory>(() => api.portfolioHistory(period), 30000, [period]);
   const hist = histQ.data;
+  const intraday = !!hist && /min|hour/i.test(hist.timeframe);
 
   const stats = useMemo(() => {
     const pts = hist?.points ?? [];
@@ -67,8 +72,8 @@ export function Pnl() {
             <div className="panel flex flex-wrap">
               <Stat label={`Total P&L (${period})`} value={signed(hist.total_pl)} sub={pct(hist.total_pl_pct)} tone={colorBySign(hist.total_pl)} help="Change in account equity across the selected range." />
               <Stat label="Start → End" value={money(hist.end_equity)} sub={`from ${money(hist.base_value)}`} />
-              {stats && <Stat label="Best period" value={signed(stats.best.pnl)} sub={fmtDate(stats.best.t)} tone="text-up" />}
-              {stats && <Stat label="Worst period" value={signed(stats.worst.pnl)} sub={fmtDate(stats.worst.t)} tone="text-down" />}
+              {stats && <Stat label="Best period" value={signed(stats.best.pnl)} sub={fmtDate(stats.best.t, intraday)} tone="text-up" />}
+              {stats && <Stat label="Worst period" value={signed(stats.worst.pnl)} sub={fmtDate(stats.worst.t, intraday)} tone="text-down" />}
               {stats && <Stat label="Win rate" value={`${num(stats.winRate, 0)}%`} sub={`${stats.wins}↑ / ${stats.losses}↓ periods`} help="Share of time-periods in this range that ended green." />}
             </div>
 
@@ -96,7 +101,7 @@ export function Pnl() {
                   <tbody className="tabular-nums">
                     {[...hist.points].reverse().map((p, i) => (
                       <tr key={i} className="border-b border-border/50 hover:bg-panel-2">
-                        <td className="px-2 py-1 font-mono text-text-dim">{fmtDate(p.t)}</td>
+                        <td className="px-2 py-1 font-mono text-text-dim">{fmtDate(p.t, intraday)}</td>
                         <td className="px-2 py-1 text-right num">{money(p.equity)}</td>
                         <td className={`px-2 py-1 text-right num ${colorBySign(p.pnl)}`}>{signed(p.pnl)}</td>
                         <td className={`px-2 py-1 text-right num ${colorBySign(p.pnl_pct)}`}>{pct(p.pnl_pct)}</td>

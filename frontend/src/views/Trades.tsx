@@ -36,8 +36,11 @@ function SideBadge({ side }: { side: string }) {
   return <Badge tone={isBuy ? 'up' : 'down'}>{side}</Badge>;
 }
 
+// Alpaca reports options as both "option" and "us_option" — normalize.
+const isOptionClass = (ac: string) => ac === 'option' || ac === 'us_option';
+
 function AssetClassBadge({ assetClass }: { assetClass: string }) {
-  const isOpt = assetClass === 'option';
+  const isOpt = isOptionClass(assetClass);
   return <Badge tone={isOpt ? 'amber' : 'neutral'}>{isOpt ? 'OPT' : 'EQ'}</Badge>;
 }
 
@@ -71,7 +74,7 @@ function StatsStrip({ trades }: { trades: Trade[] }) {
     for (const t of trades) {
       if ((t.status || '').toLowerCase().includes('fill')) filled++;
       if (isOpenStatus(t.status)) open++;
-      if (t.asset_class === 'option') options++;
+      if (isOptionClass(t.asset_class)) options++;
       else equity++;
     }
     return { total: trades.length, filled, open, options, equity };
@@ -165,8 +168,8 @@ export function Trades() {
     const q = symbolQuery.trim().toUpperCase();
     return all.filter((t) => {
       if (q && !t.symbol.toUpperCase().includes(q)) return false;
-      if (assetClass === 'equity' && t.asset_class !== 'us_equity') return false;
-      if (assetClass === 'option' && t.asset_class !== 'option') return false;
+      if (assetClass === 'equity' && isOptionClass(t.asset_class)) return false;
+      if (assetClass === 'option' && !isOptionClass(t.asset_class)) return false;
       if (source !== 'all') {
         // 'ai' filter also matches bot-sourced trades.
         const s = t.source || 'manual';
