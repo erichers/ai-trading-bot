@@ -121,6 +121,7 @@ async fn init_mysql(pool: &sqlx::mysql::MySqlPool) -> anyhow::Result<()> {
         "CREATE TABLE IF NOT EXISTS deep_research (id INT AUTO_INCREMENT PRIMARY KEY, symbol VARCHAR(32), kind VARCHAR(24), title VARCHAR(255), body MEDIUMTEXT, data JSON, provider VARCHAR(32), model VARCHAR(64), created_at DATETIME)",
         "CREATE TABLE IF NOT EXISTS bots (id VARCHAR(64) PRIMARY KEY, name VARCHAR(255), enabled BOOLEAN, symbols JSON, kind VARCHAR(32), config JSON, rules JSON, ai_gate JSON, risk JSON, action JSON, mode VARCHAR(16), created_at DATETIME, updated_at DATETIME)",
         "CREATE TABLE IF NOT EXISTS chat_messages (id INT AUTO_INCREMENT PRIMARY KEY, role VARCHAR(16), content TEXT, meta JSON, created_at DATETIME)",
+        "CREATE TABLE IF NOT EXISTS rag_documents (id INT AUTO_INCREMENT PRIMARY KEY, source_table VARCHAR(48), source_id VARCHAR(96), doc_text TEXT, embedding LONGTEXT, metadata JSON, source_updated_at VARCHAR(48), updated_at DATETIME, UNIQUE KEY uq_rag_src (source_table, source_id))",
     ];
     for stmt in ddl {
         let _ = sqlx::query(stmt).execute(pool).await;
@@ -164,6 +165,8 @@ async fn init_sqlite(pool: &sqlx::sqlite::SqlitePool) -> anyhow::Result<()> {
         "CREATE TABLE IF NOT EXISTS deep_research (id INTEGER PRIMARY KEY AUTOINCREMENT, symbol TEXT, kind TEXT, title TEXT, body TEXT, data TEXT, provider TEXT, model TEXT, created_at TEXT)",
         "CREATE TABLE IF NOT EXISTS bots (id TEXT PRIMARY KEY, name TEXT, enabled INTEGER, symbols TEXT, kind TEXT, config TEXT, rules TEXT, ai_gate TEXT, risk TEXT, action TEXT, mode TEXT, created_at TEXT, updated_at TEXT)",
         "CREATE TABLE IF NOT EXISTS chat_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, role TEXT, content TEXT, meta TEXT, created_at TEXT)",
+        "CREATE TABLE IF NOT EXISTS rag_documents (id INTEGER PRIMARY KEY AUTOINCREMENT, source_table TEXT, source_id TEXT, doc_text TEXT, embedding TEXT, metadata TEXT, source_updated_at TEXT, updated_at TEXT)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_rag_src ON rag_documents (source_table, source_id)",
     ];
     for stmt in ddl {
         sqlx::query(stmt).execute(pool).await?;

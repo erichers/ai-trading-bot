@@ -1,4 +1,5 @@
-import type { ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { HelpCircle } from 'lucide-react';
 
 export function Panel({
   title,
@@ -107,6 +108,70 @@ export function Toggle({
         </button>
       ))}
     </div>
+  );
+}
+
+// Small "?" info icon with an accessible popover. Opens on hover and on
+// click/focus (so it works on touch + keyboard too). Terminal-themed.
+export function HelpTip({
+  children,
+  title,
+  className = '',
+}: {
+  children: ReactNode;
+  title?: string;
+  className?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLSpanElement>(null);
+
+  // Close on outside click / Escape.
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onDoc);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDoc);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  return (
+    <span
+      ref={ref}
+      className={`relative inline-flex items-center align-middle ${className}`}
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+    >
+      <button
+        type="button"
+        aria-label={title ? `Help: ${title}` : 'Help'}
+        aria-expanded={open}
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          setOpen((o) => !o);
+        }}
+        className="text-muted hover:text-amber focus:text-amber focus:outline-none transition-colors"
+      >
+        <HelpCircle size={13} />
+      </button>
+      {open && (
+        <span
+          role="tooltip"
+          className="absolute left-1/2 top-full z-50 mt-1.5 w-64 -translate-x-1/2 rounded border border-amber/40 bg-panel-2 px-2.5 py-2 text-left text-2xs leading-relaxed text-text-dim shadow-lg shadow-black/40 normal-case tracking-normal"
+        >
+          {title && <span className="micro-label text-amber block mb-1">{title}</span>}
+          {children}
+        </span>
+      )}
+    </span>
   );
 }
 

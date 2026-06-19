@@ -17,9 +17,14 @@ import {
   TrendingDown,
   CandlestickChart,
   RefreshCw,
+  FlaskConical,
+  Lightbulb,
+  AlertTriangle,
 } from 'lucide-react';
 import { api, ApiError } from '@/api/client';
 import type {
+  Backtest as BacktestResult,
+  BacktestLookback,
   Bot,
   BotAction,
   BotConfig,
@@ -35,7 +40,9 @@ import type {
 import { blankAction } from '@/api/types';
 import { money, num, pct } from '@/lib/format';
 import { takeTemplatePrefill } from '@/lib/templatePrefill';
-import { Badge, Empty, ErrorState, Panel, Spinner, Toggle } from '@/components/ui';
+import { Badge, Empty, ErrorState, HelpTip, Panel, Spinner, Toggle } from '@/components/ui';
+import { indicatorHint, ruleWarning } from '@/lib/builderHints';
+import { BacktestResults } from '@/components/BacktestResults';
 import { BotEvaluation } from '@/components/BotEvaluation';
 import { Markdown } from '@/components/Markdown';
 import { TickerSearch } from '@/components/TickerSearch';
@@ -76,6 +83,14 @@ const MODE_OPTIONS: { value: BotMode; label: string }[] = [
 const STEPS = ['Ticker', 'Entry trigger', 'Action', 'Sizing & risk', 'Review & Save'];
 
 const MICRO = 'micro-label block mb-1';
+
+const BACKTEST_LOOKBACKS: { value: BacktestLookback; label: string }[] = [
+  { value: '1D', label: '1D' },
+  { value: '2D', label: '2D' },
+  { value: '1W', label: '1W' },
+  { value: '1M', label: '1M' },
+  { value: '3M', label: '3M' },
+];
 
 // ---- Builder draft -------------------------------------------------------
 
@@ -419,6 +434,182 @@ function AiBuilder({ onDraft }: { onDraft: (b: Partial<Bot>, explanation: string
 }
 
 // ==========================================================================
+//  Inline backtest of the in-progress draft (no save)
+// ==========================================================================
+
+interface DraftBacktestState {
+  lookback: BacktestLookback;
+  running: boolean;
+  error: string | null;
+  engineDown: boolean;
+  result: BacktestResult | null;
+  ranSignature: string | null;
+}
+
+function useDraftBacktest(draft: Draft, defaultLookback: BacktestLookback) {
+  const [state, setState] = useState<DraftBacktestState>({
+    lookback: defaultLookback,
+    running: false,
+    error: null,
+    engineDown: false,
+    result: null,
+    ranSignature: null,
+  });
+
+  // Build the /api/backtest request body from the IN-PROGRESS draft (no bot_id).
+  const symbols = draft.symbols.length ? draft.symbols : draft.primary ? [draft.primary] : [];
+  const rulesReady = draft.rules.some(
+    (r) => r.value !== '' && r.value !== undefined && r.value !== null,
+  );
+
+  // Stable signature of everything that affects the backtest result.
+  const signature = useMemo(
+    () =>
+      JSON.stringify({
+        symbols,
+        timeframe: draft.timeframe,
+        rules: draft.rules,
+        action: draft.action,
+        ai_gate: draft.ai_gate,
+        lookback: state.lookback,
+      }),
+    [symbols, draft.timeframe, draft.rules, draft.action, draft.ai_gate, state.lookback],
+  );
+
+  const setLookback = (lookback: BacktestLookback) =>
+    setState((s) => ({ ...s, lookback }));
+
+  async function run() {
+    if (symbols.length === 0) {
+      setState((s) => ({ ...s, error: 'Add at least one ticker to backtest.' }));
+      return;
+    }
+    if (!rulesReady) {
+      setState((s) => ({ ...s, error: 'Add at least one entry trigger to backtest.' }));
+      return;
+    }
+    setState((s) => ({ ...s, running: true, error: null, engineDown: false }));
+    try {
+      const res = await api.backtest({
+        symbols,
+        timeframe: draft.timeframe,
+        rules: draft.rules,
+        action: draft.action,
+        ai_gate: draft.ai_gate,
+        lookback: state.lookback,
+      });
+      setState((s) => ({ ...s, result: res, ranSignature: signature, running: false }));
+    } catch (e) {
+      if (e instanceof ApiError && (e.status === 404 || e.status === 503)) {
+        setState((s) => ({ ...s, result: null, engineDown: true, running: false }));
+      } else {
+        setState((s) => ({
+          ...s,
+          result: null,
+          error: (e as Error).message || 'Backtest failed',
+          running: false,
+        }));
+      }
+    }
+  }
+
+  const stale =
+    state.result !== null && state.ranSignature !== null && signature !== state.ranSignature;
+
+  return { state, setLookback, run, stale, symbols };
+}
+
+function DraftBacktest({
+  bt,
+  draft,
+  collapsible = false,
+}: {
+  bt: ReturnType<typeof useDraftBacktest>;
+  draft: Draft;
+  collapsible?: boolean;
+}) {
+  const [open, setOpen] = useState(!collapsible);
+  const { state, setLookback, run, stale, symbols } = bt;
+  const { lookback, running, error, engineDown, result } = state;
+
+  if (collapsible && !open) {
+    return (
+      <button
+        className="flex items-center gap-1.5 text-2xs uppercase tracking-wider text-text-dim hover:text-amber transition-colors self-start"
+        onClick={() => setOpen(true)}
+      >
+        <FlaskConical size={12} /> ▸ Backtest current draft
+      </button>
+    );
+  }
+
+  return (
+    <div className="rounded border border-border bg-bg-2 p-3 flex flex-col gap-3">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <span className="micro-label flex items-center gap-1.5 text-amber">
+          <FlaskConical size={13} /> Backtest current draft
+        </span>
+        {collapsible && (
+          <button className="btn !py-0.5" onClick={() => setOpen(false)}>
+            <X size={12} />
+          </button>
+        )}
+      </div>
+
+      <div className="flex flex-wrap items-end gap-3">
+        <div className="flex flex-col gap-1">
+          <span className="micro-label">Lookback</span>
+          <Toggle
+            value={lookback}
+            onChange={(v) => setLookback(v as BacktestLookback)}
+            options={BACKTEST_LOOKBACKS}
+          />
+        </div>
+        <button
+          className="btn-amber flex items-center gap-1.5 py-1.5 px-4"
+          onClick={() => void run()}
+          disabled={running}
+        >
+          <Play size={13} /> {running ? 'Simulating…' : 'Backtest current draft'}
+        </button>
+        <span className="text-2xs text-muted">
+          {symbols.length ? symbols.join(', ') : 'no ticker'} · {draft.timeframe}
+        </span>
+      </div>
+
+      {stale && !running && (
+        <div className="text-2xs text-amber/90 micro-label flex items-center gap-1.5">
+          <RefreshCw size={11} /> Draft changed since last run — re-run to see updated results.
+        </div>
+      )}
+
+      {running ? (
+        <div className="flex flex-col items-center gap-2 py-6">
+          <Spinner label="Simulating over real history…" />
+          <span className="text-2xs text-muted micro-label">
+            Replaying {lookback} of bars — this can take 10–30s.
+          </span>
+        </div>
+      ) : engineDown ? (
+        <div className="flex flex-col items-center justify-center gap-2 text-center py-6">
+          <FlaskConical size={20} className="text-amber animate-pulse" />
+          <span className="text-amber text-xs micro-label">Backtest engine starting…</span>
+          <button className="btn mt-1" onClick={() => void run()}>
+            Retry
+          </button>
+        </div>
+      ) : error ? (
+        <ErrorState label={error} onRetry={() => void run()} />
+      ) : result ? (
+        <BacktestResults result={result} />
+      ) : (
+        <Empty label="Set your lookback, then Backtest current draft." />
+      )}
+    </div>
+  );
+}
+
+// ==========================================================================
 //  Multi-step Builder form (reusable; embedded by BotSetup too)
 // ==========================================================================
 
@@ -450,6 +641,10 @@ export function BuilderForm({
   const [aiExplanation, setAiExplanation] = useState<string | null>(null);
 
   const [expirations, setExpirations] = useState<OptionExpiration[]>([]);
+
+  // Inline backtest of the in-progress draft — state lifted here so results
+  // persist as the user moves between steps (mid-build alter-then-retest loop).
+  const bt = useDraftBacktest(draft, '1M');
 
   // indicator catalog
   useEffect(() => {
@@ -549,6 +744,11 @@ export function BuilderForm({
           : [{ indicator: 'rsi14', operator: '>', value: '', join: 'AND' }],
       };
     });
+  }
+
+  // Apply a "suggested trigger" chip to a rule row, preserving its join.
+  function applySuggestion(i: number, s: { indicator: string; operator: string; value: string | number }) {
+    updateRule(i, { indicator: s.indicator, operator: s.operator, value: s.value });
   }
 
   // ---- validation per step ----
@@ -736,7 +936,13 @@ export function BuilderForm({
       {step === 0 && (
         <div className="flex flex-col gap-3">
           <div>
-            <label className={MICRO}>Pick the underlying</label>
+            <label className={MICRO}>
+              Pick the underlying
+              <HelpTip title="Underlying" className="ml-1">
+                The stock or ETF the bot watches and trades. Add one or more — the bot scans
+                each for your trigger. The primary (★) is the one the live contract picker uses.
+              </HelpTip>
+            </label>
             <TickerSearch onSelect={addTicker} placeholder="Search & add ticker (e.g. QQQ)…" />
           </div>
           {draft.symbols.length > 0 && (
@@ -787,7 +993,14 @@ export function BuilderForm({
       {step === 1 && (
         <div className="flex flex-col gap-3">
           <div>
-            <label className={MICRO}>Timeframe</label>
+            <label className={MICRO}>
+              Timeframe
+              <HelpTip title="Timeframe" className="ml-1">
+                The bar size the rules are evaluated on. Smaller bars (1–5 min) give more
+                signals but more noise — day-trading. Larger bars (1Hour / 1Day) give fewer,
+                cleaner signals — swing / position trading.
+              </HelpTip>
+            </label>
             <select
               className="input"
               value={draft.timeframe}
@@ -802,13 +1015,24 @@ export function BuilderForm({
           </div>
           <div>
             <div className="flex items-center justify-between mb-1">
-              <label className="micro-label">Entry rules — when to buy</label>
+              <label className="micro-label flex items-center gap-1">
+                Entry rules — when to buy
+                <HelpTip title="Entry rules">
+                  When ALL (AND) / ANY (OR) of these conditions are true on a closed bar, the
+                  bot signals an entry. Each row is <span className="text-text">[indicator]
+                  [operator] [value]</span>; the value can be a number or another indicator key
+                  (e.g. <span className="text-amber">ema21</span>, <span className="text-amber">vwap</span>).
+                </HelpTip>
+              </label>
               <button className="btn flex items-center gap-1" onClick={addRule}>
                 <Plus size={12} /> Rule
               </button>
             </div>
             <div className="flex flex-col gap-1">
-              {draft.rules.map((rule, i) => (
+              {draft.rules.map((rule, i) => {
+                const info = indicatorHint(rule.indicator);
+                const warn = ruleWarning(rule);
+                return (
                 <div key={i}>
                   {i > 0 && (
                     <div className="flex items-center gap-2 py-1">
@@ -863,8 +1087,42 @@ export function BuilderForm({
                       <Trash2 size={12} />
                     </button>
                   </div>
+
+                  {/* Hint for the picked indicator */}
+                  <div className="flex items-start gap-1.5 mt-1 px-0.5 text-2xs text-text-dim leading-relaxed">
+                    <Lightbulb size={11} className="text-amber shrink-0 mt-0.5" />
+                    <span>{info.hint}</span>
+                  </div>
+
+                  {/* Suggested triggers — click to fill this row */}
+                  {info.suggestions.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-1 mt-1 px-0.5">
+                      <span className="text-2xs uppercase tracking-wider text-muted mr-0.5">
+                        Suggested
+                      </span>
+                      {info.suggestions.map((s) => (
+                        <button
+                          key={s.label}
+                          onClick={() => applySuggestion(i, s.rule)}
+                          className="text-2xs px-1.5 py-0.5 rounded border border-amber/30 bg-amber/5 text-amber hover:bg-amber/15 transition-colors"
+                          title="Click to apply this trigger"
+                        >
+                          {s.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Non-blocking sanity warning */}
+                  {warn && (
+                    <div className="flex items-start gap-1.5 mt-1 px-0.5 text-2xs text-amber leading-relaxed">
+                      <AlertTriangle size={11} className="shrink-0 mt-0.5" />
+                      <span>{warn}</span>
+                    </div>
+                  )}
                 </div>
-              ))}
+                );
+              })}
             </div>
           </div>
           <div className="rounded border border-amber/30 bg-amber/5 px-3 py-2">
@@ -878,7 +1136,14 @@ export function BuilderForm({
       {step === 2 && (
         <div className="flex flex-col gap-3">
           <div>
-            <label className={MICRO}>What to trade</label>
+            <label className={MICRO}>
+              What to trade
+              <HelpTip title="Right (call / put / shares)" className="ml-1">
+                Calls profit when the underlying moves up; puts profit when it moves down.
+                Buy shares to trade the stock directly. If your trigger doesn't imply a
+                direction, the AI / trigger logic can decide it for you.
+              </HelpTip>
+            </label>
             <div className="grid grid-cols-3 gap-2">
               <ActionButton
                 active={draft.action.asset === 'option' && draft.action.right === 'call'}
@@ -914,7 +1179,14 @@ export function BuilderForm({
             <>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className={MICRO}>Expiry</label>
+                  <label className={MICRO}>
+                    Expiry
+                    <HelpTip title="Expiry" className="ml-1">
+                      Which option expiration to trade. "Nearest weekly" always rolls to the
+                      next weekly contract — cheaper and more reactive, but decays fast. Pick a
+                      dated expiry for more time / less theta burn.
+                    </HelpTip>
+                  </label>
                   <select
                     className="input w-full"
                     value={draft.action.expiry}
@@ -936,7 +1208,15 @@ export function BuilderForm({
                   )}
                 </div>
                 <div>
-                  <label className={MICRO}>Moneyness</label>
+                  <label className={MICRO}>
+                    Moneyness
+                    <HelpTip title="Moneyness (ATM / OTM / ITM)" className="ml-1">
+                      Strike relative to the current price. <span className="text-amber">ATM</span> ≈ 50
+                      delta (balanced). <span className="text-amber">OTM</span> is cheaper but
+                      lower-probability — needs a bigger move to pay off. <span className="text-amber">ITM</span> is
+                      pricier but higher-probability and moves more like the stock.
+                    </HelpTip>
+                  </label>
                   <Toggle
                     value={draft.action.moneyness}
                     onChange={(v) =>
@@ -950,7 +1230,13 @@ export function BuilderForm({
                   />
                   {draft.action.moneyness === 'OTM' && (
                     <div className="flex items-center gap-2 mt-2">
-                      <span className="text-2xs text-muted">OTM strikes</span>
+                      <span className="text-2xs text-muted flex items-center gap-1">
+                        OTM strikes
+                        <HelpTip title="OTM strikes">
+                          How many strikes out-of-the-money from ATM to step. 1 is just past
+                          the money; higher = cheaper, further reach, lower probability.
+                        </HelpTip>
+                      </span>
                       <input
                         type="number"
                         min={0}
@@ -1012,18 +1298,37 @@ export function BuilderForm({
               Bot will buy shares of {draft.primary || 'the ticker'} on entry — no contract to pick.
             </div>
           )}
+
+          <DraftBacktest bt={bt} draft={draft} collapsible />
         </div>
       )}
 
       {/* ---------------- STEP 3: Sizing & risk + mode ---------------- */}
       {step === 3 && (
         <div className="flex flex-col gap-4">
+          {/* Sizing & risk basics — how the three numbers relate */}
+          <div className="rounded border border-amber/30 bg-amber/5 px-3 py-2 text-2xs text-text-dim leading-relaxed">
+            <span className="micro-label text-amber flex items-center gap-1.5 mb-1">
+              <Lightbulb size={12} /> Sizing &amp; risk basics
+            </span>
+            <span className="num text-text">Risk / trade %</span> sets the most you'd lose if
+            the stop hits — e.g. 1% of a $30k account = $300 at risk. The position size is
+            derived from that and your stop distance, so a tighter stop buys more contracts for
+            the same risk. <span className="num text-text">Contracts</span> is the cap on size,
+            and <span className="num text-text">max premium</span> skips trades that cost more
+            than you want per contract.
+          </div>
           <div>
             <label className={MICRO}>Sizing</label>
             <div className="grid grid-cols-3 gap-2">
               <div>
-                <span className="text-2xs text-muted">
+                <span className="text-2xs text-muted flex items-center gap-1">
                   {draft.action.asset === 'equity' ? 'Qty (shares)' : 'Contracts'}
+                  <HelpTip title={draft.action.asset === 'equity' ? 'Quantity' : 'Contracts'}>
+                    {draft.action.asset === 'equity'
+                      ? 'Number of shares to buy per entry.'
+                      : 'Number of option contracts per entry. Each contract controls 100 shares of exposure.'}
+                  </HelpTip>
                 </span>
                 <input
                   type="number"
@@ -1039,7 +1344,14 @@ export function BuilderForm({
                 />
               </div>
               <div>
-                <span className="text-2xs text-muted">Risk / trade %</span>
+                <span className="text-2xs text-muted flex items-center gap-1">
+                  Risk / trade %
+                  <HelpTip title="Risk per trade %">
+                    The max % of account equity you'd lose if the stop is hit. Position size is
+                    derived from this and the stop distance. 0.5–1% is conservative; higher
+                    risks more per trade.
+                  </HelpTip>
+                </span>
                 <input
                   type="number"
                   step="0.1"
@@ -1050,7 +1362,13 @@ export function BuilderForm({
                 />
               </div>
               <div>
-                <span className="text-2xs text-muted">Max premium ($)</span>
+                <span className="text-2xs text-muted flex items-center gap-1">
+                  Max premium ($)
+                  <HelpTip title="Max premium ($)">
+                    Skip a trade if the option costs more than this per contract (price × 100).
+                    Caps how much you'll pay for a single contract.
+                  </HelpTip>
+                </span>
                 <input
                   type="number"
                   min="0"
@@ -1068,7 +1386,14 @@ export function BuilderForm({
           </div>
 
           <div>
-            <label className={MICRO}>AI Gate — market research</label>
+            <label className={MICRO}>
+              AI Gate — market research
+              <HelpTip title="AI gate / Min conviction" className="ml-1">
+                Require the AI research conviction (0–100) to clear this bar before the bot
+                trades. Higher = pickier, fewer trades but stronger setups. Turn off to trade
+                purely on the technical trigger.
+              </HelpTip>
+            </label>
             <div className="flex items-center gap-3">
               <Toggle
                 value={draft.ai_gate.enabled ? 'on' : 'off'}
@@ -1102,13 +1427,23 @@ export function BuilderForm({
           </div>
 
           <div>
-            <label className={MICRO}>Mode</label>
+            <label className={MICRO}>
+              Mode
+              <HelpTip title="Mode" className="ml-1">
+                <span className="text-amber">Signal-only</span> alerts you, places no orders.
+                {' '}<span className="text-amber">Semi-auto</span> queues a proposal you approve
+                each time. <span className="text-amber">Full-auto</span> places orders
+                automatically — the risk engine can still veto.
+              </HelpTip>
+            </label>
             <Toggle
               value={draft.mode}
               onChange={(v) => patch({ mode: v as BotMode })}
               options={MODE_OPTIONS}
             />
           </div>
+
+          <DraftBacktest bt={bt} draft={draft} collapsible />
         </div>
       )}
 
@@ -1150,6 +1485,9 @@ export function BuilderForm({
             />
             <Row label="Mode" value={draft.mode} />
           </div>
+
+          {/* Backtest the draft over real history BEFORE saving. */}
+          <DraftBacktest bt={bt} draft={draft} />
 
           <button
             className="btn-amber flex items-center justify-center gap-1.5 py-2.5 text-sm"

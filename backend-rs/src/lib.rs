@@ -13,6 +13,7 @@ pub mod error;
 pub mod indicators;
 pub mod llm;
 pub mod options;
+pub mod rag;
 pub mod research;
 pub mod risk;
 pub mod signals;
@@ -166,6 +167,10 @@ pub fn build_app(app_state: AppState) -> Router {
         .route("/chat", post(chat_post))
         .route("/chat/schema", get(chat_schema))
         .route("/chat/history", get(chat_history))
+        // RAG knowledge index
+        .route("/rag/reindex", post(rag_reindex))
+        .route("/rag/search", get(rag_search))
+        .route("/insights", get(insights_get))
         // sync (SQLite <-> MySQL; native app only)
         .route("/sync", post(sync_now))
         .route("/sync/status", get(sync_status));
@@ -191,6 +196,9 @@ pub async fn run(settings: Option<Arc<Settings>>, port: Option<u16>) -> anyhow::
 
     // Background research worker.
     worker::start(app_state.clone());
+
+    // RAG knowledge index: index on startup + refresh every ~5 min (non-blocking).
+    rag::start(app_state.clone());
 
     // SQLite <-> MySQL sync: only the native app (DB_BACKEND=sqlite) syncs.
     // The MySQL web binary must NOT run this (it IS the source of truth).
@@ -897,6 +905,22 @@ async fn chat_post(State(s): State<AppState>, Json(body): Json<Value>) -> Json<V
     let _ = db::insert_chat_message(&s.pool, "user", message, &json!({})).await;
     let _ = db::insert_chat_message(&s.pool, "assistant", result["answer"].as_str().unwrap_or(""), &json!({"mode": result["mode"], "sql": result["sql"]})).await;
     Json(result)
+}
+
+// ---- RAG knowledge index ----------------------------------------------------
+async fn rag_reindex(State(s): State<AppState>) -> Json<Value> {
+    Json(rag::reindex(&s).await)
+}
+async fn rag_search(
+    State(s): State<AppState>,
+    Query(q): Query<HashMap<String, String>>,
+) -> Json<Value> {
+    let query = q.get("q").map(|x| x.as_str()).unwrap_or("");
+    let k = qint(&q, "k", 6).clamp(1, 50) as usize;
+    Json(rag::search(&s, query, k).await)
+}
+async fn insights_get(State(s): State<AppState>) -> Json<Value> {
+    Json(rag::compute_insights(&s).await)
 }
 
 // ---- sync (SQLite <-> MySQL) ------------------------------------------------

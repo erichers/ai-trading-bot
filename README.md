@@ -24,7 +24,11 @@ The two stay in sync automatically (SQLite ↔ MySQL).
 - **Builder** — a guided wizard: pick ticker → entry trigger (e.g. *RSI crosses above 32 on 5m*) → action (**buy calls/puts**, pick the exact contract from the **live options chain** at ATM/OTM/ITM) → sizing/risk/mode → save.
 - **Options Flow** — real Alpaca chains, weekly/daily, greeks/IV, put/call ratio, unusual-activity detection.
 - **Research** — **Kimi** (cloud) on-demand deep dives + a **free local Gemma** worker researching MAG7 (TSLA/META/NVDA focus) **24/7**, with earnings notes; all persisted and browsable.
-- **Chat (Vanna-style)** — ask questions in plain English; a local model writes **read-only SQL**, runs it on your DB, and answers — plus questions about the app itself.
+- **Strategy Library** — 12 research-backed day/swing/position templates (RSI bounce, EMA crossover, MACD momentum, Bollinger reversion, Golden Cross, …) with education; one-click **Add as Bot**, inline **Backtest**, or **Customize** in the Builder.
+- **Builder** — guided wizard with per-indicator **hints + suggested triggers**, education on every setting (sizing, risk %, stop/target, AI gate, mode), and an **inline backtest** to test/alter a draft before saving.
+- **Backtest** — run any bot/strategy over real Alpaca history (1D–3M): equity curve, win rate, profit factor, drawdown, trade list.
+- **Bot explainability** — every bot shows, per symbol, whether it's firing and *why not* (each trigger with its actual value, the AI gate, the chosen contract, and risk vetoes).
+- **Chat (Vanna-style + RAG)** — ask in plain English; a local model writes **read-only SQL** over your DB, OR retrieves from a **RAG index** of your trades/logs/research (local embeddings) and an auto-computed **insights** layer to answer "how are my bots doing / what should I improve?" with grounded suggestions.
 - **Risk** — position sizing, max position/concentration, daily-loss circuit breaker, per-trade R, kill switch; every veto is logged.
 - **Trades / Positions / News / Settings / Onboarding / Help**.
 

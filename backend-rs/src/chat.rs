@@ -2,6 +2,7 @@
 
 use crate::db;
 use crate::llm::parse_json_loose;
+use crate::rag;
 use crate::state::AppState;
 use serde_json::{json, Value};
 
@@ -173,30 +174,64 @@ async fn summarize_rows(state: &AppState, message: &str, sql: &str, result: &Val
     }
 }
 
-async fn chat_answer(state: &AppState, message: &str, history: &[Value]) -> String {
+async fn chat_answer(state: &AppState, message: &str, history: &[Value], grounding: &str) -> String {
     let mut hist = String::new();
     for h in history.iter().rev().take(6).rev() {
         hist += &format!("{}: {}\n", h["role"].as_str().unwrap_or("user"), h["content"].as_str().unwrap_or(""));
     }
     let user = format!(
-        "{}\n\nConversation so far:\n{}\nUser question: {}\n\nAnswer helpfully in concise markdown.",
+        "{}\n\n{}\n\nConversation so far:\n{}\nUser question: {}\n\nUsing the user's real trading history and insights above, answer helpfully in concise markdown. When relevant, offer concrete hints/suggestions grounded in their history (\"based on your history…\"). If the grounding doesn't cover the question, answer from general knowledge of the app.",
         app_context(state).await,
+        grounding,
         hist,
         message
     );
     match state
         .llm
         .ollama_chat(
-            "You are the assistant inside an AI trading terminal app. Be concise, concrete, and helpful. Plain markdown, no JSON.",
+            "You are the assistant inside an AI trading terminal app. You have access to the user's REAL trade/research history and computed insights. Be concise, concrete, and helpful, and proactively suggest improvements grounded in their data. Plain markdown, no JSON. Never invent numbers not present in the grounding.",
             &user,
             false,
-            500,
+            600,
         )
         .await
     {
         Ok(s) => s.trim().to_string(),
         Err(_) => "I can answer questions about your trades, research, signals, risk events, bots, and the app itself. (The language model is currently unavailable, so this is a fallback response.)".to_string(),
     }
+}
+
+/// Build a grounding block from top-k RAG docs + computed insights for the question.
+/// Returns (grounding_text, sources_array).
+async fn build_grounding(state: &AppState, message: &str) -> (String, Value) {
+    let search = rag::search(state, message, 6).await;
+    let empty = vec![];
+    let results = search["results"].as_array().unwrap_or(&empty);
+
+    let mut block = String::new();
+    let insights = rag::compute_insights(state).await;
+    block += &format!(
+        "User's trading insights (REAL data): {} total trades, {:.0}% fill rate. By strategy: {}. Top veto reasons: {}. Improvement hints: {}.\n",
+        insights["total_trades"].as_i64().unwrap_or(0),
+        insights["fill_rate"].as_f64().unwrap_or(0.0) * 100.0,
+        insights["by_strategy"].as_array().map(|a| a.iter().take(6).map(|s| format!("{} {:.0}%", s["strategy_id"].as_str().unwrap_or("?"), s["fill_rate"].as_f64().unwrap_or(0.0) * 100.0)).collect::<Vec<_>>().join(", ")).unwrap_or_default(),
+        insights["top_veto_reasons"].as_array().map(|a| a.iter().map(|r| format!("{} ({})", r["reason"].as_str().unwrap_or("?"), r["count"].as_i64().unwrap_or(0))).collect::<Vec<_>>().join(", ")).unwrap_or_default(),
+        insights["hints"].as_array().map(|a| a.iter().filter_map(|h| h.as_str()).collect::<Vec<_>>().join(" ")).unwrap_or_default(),
+    );
+
+    if !results.is_empty() {
+        block += "\nRelevant records from the user's history:\n";
+        for r in results.iter().take(6) {
+            block += &format!(
+                "- [{}] {}\n",
+                r["source_table"].as_str().unwrap_or(""),
+                r["doc_text"].as_str().unwrap_or("")
+            );
+        }
+    }
+
+    let grounding = format!("Grounding context (retrieved from the user's real data):\n{block}");
+    (grounding, Value::Array(results.clone()))
 }
 
 pub async fn ask(state: &AppState, message: &str, history: &[Value]) -> Value {
@@ -242,6 +277,11 @@ pub async fn ask(state: &AppState, message: &str, history: &[Value]) -> Value {
             }),
         }
     } else {
-        json!({"answer": chat_answer(state, message, history).await, "mode": "chat"})
+        let (grounding, sources) = build_grounding(state, message).await;
+        json!({
+            "answer": chat_answer(state, message, history, &grounding).await,
+            "mode": "chat",
+            "sources": sources,
+        })
     }
 }

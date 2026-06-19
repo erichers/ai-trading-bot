@@ -130,6 +130,37 @@ impl Llm {
         let data: Value = serde_json::from_str(&text)?;
         Ok(data["message"]["content"].as_str().unwrap_or("").to_string())
     }
+
+    /// Local Ollama embeddings: POST /api/embeddings {model, prompt} -> Vec<f32>.
+    /// Returns an error (NOT mock) so callers can fall back to keyword retrieval.
+    pub async fn embed(&self, text: &str) -> anyhow::Result<Vec<f32>> {
+        let payload = json!({
+            "model": self.settings.embed_model,
+            "prompt": text,
+        });
+        let url = format!("{}/api/embeddings", self.settings.ollama_base_url);
+        let resp = self
+            .http
+            .post(&url)
+            .timeout(Duration::from_secs(60))
+            .json(&payload)
+            .send()
+            .await?;
+        let status = resp.status();
+        let body = resp.text().await?;
+        if !status.is_success() {
+            anyhow::bail!("Ollama embeddings {} : {}", status, body);
+        }
+        let data: Value = serde_json::from_str(&body)?;
+        let arr = data["embedding"]
+            .as_array()
+            .ok_or_else(|| anyhow::anyhow!("embeddings response missing 'embedding' array"))?;
+        let v: Vec<f32> = arr.iter().filter_map(|x| x.as_f64().map(|f| f as f32)).collect();
+        if v.is_empty() {
+            anyhow::bail!("embeddings returned an empty vector");
+        }
+        Ok(v)
+    }
 }
 
 /// Loose JSON parse: strip ```json fences, fall back to first {...} block.

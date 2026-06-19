@@ -16,6 +16,8 @@ pub struct Settings {
     pub chat_provider: String,
     pub ollama_base_url: String,
     pub research_model: String,
+    /// Ollama embedding model for the RAG index. Default `nomic-embed-text`.
+    pub embed_model: String,
 
     pub kimi_api_key: String,
     pub kimi_base_url: String,
@@ -66,6 +68,7 @@ impl Settings {
             chat_provider: ev("CHAT_PROVIDER", "ollama"),
             ollama_base_url: ev("OLLAMA_BASE_URL", "http://localhost:11434"),
             research_model: ev("RESEARCH_MODEL", "gemma4:e2b"),
+            embed_model: ev("EMBED_MODEL", "nomic-embed-text"),
 
             kimi_api_key: ev("KIMI_API_KEY", ""),
             kimi_base_url: ev("KIMI_BASE_URL", "https://api.moonshot.ai/v1"),
