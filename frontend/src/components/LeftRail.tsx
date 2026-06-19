@@ -46,7 +46,7 @@ const items: NavItem[] = [
 
 export function LeftRail() {
   return (
-    <nav className="flex flex-col w-16 bg-black border-r border-border shrink-0 py-3 gap-0.5">
+    <nav className="flex flex-col w-16 bg-black border-r border-border shrink-0 py-2 gap-0.5">
       {items.map(({ to, icon: Icon, label }) => (
         <NavLink
           key={to}
@@ -54,7 +54,7 @@ export function LeftRail() {
           end={to === '/'}
           title={label}
           className={({ isActive }) =>
-            `group relative flex flex-col items-center gap-1 py-2.5 mx-2 rounded-xl transition-colors ${
+            `group relative flex flex-col items-center gap-1 py-2 mx-2 rounded-xl transition-colors ${
               isActive
                 ? 'text-amber bg-amber/10'
                 : 'text-muted hover:text-text hover:bg-panel-2'

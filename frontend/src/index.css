@@ -46,9 +46,9 @@ body {
 }
 
 @layer components {
-  /* Soft rounded cards with comfortable padding. */
+  /* Soft rounded cards — tightened for a dense trading terminal. */
   .panel {
-    @apply bg-panel border border-border rounded-2xl;
+    @apply bg-panel border border-border rounded-xl;
   }
   /* Tasteful, dim, letter-spaced micro labels (softer than before). */
   .micro-label {
@@ -63,18 +63,18 @@ body {
   }
   /* Secondary / ghost button — fully-rounded pill, subtle outline. */
   .btn {
-    @apply inline-flex items-center justify-center px-4 py-1.5 text-xs font-medium rounded-full border border-border-2 bg-transparent hover:bg-panel-2 text-text transition-colors;
+    @apply inline-flex items-center justify-center px-3 py-1 text-xs font-medium rounded-full border border-border-2 bg-transparent hover:bg-panel-2 text-text transition-colors;
   }
   /* Primary button — lime fill, black text, pill. */
   .btn-amber {
-    @apply inline-flex items-center justify-center px-4 py-1.5 text-xs font-semibold rounded-full border border-transparent bg-amber hover:bg-amber-dim text-black transition-colors;
+    @apply inline-flex items-center justify-center px-3 py-1 text-xs font-semibold rounded-full border border-transparent bg-amber hover:bg-amber-dim text-black transition-colors;
   }
   /* Destructive button — vivid red pill. */
   .btn-danger {
-    @apply inline-flex items-center justify-center px-4 py-1.5 text-xs font-semibold rounded-full border border-transparent bg-down hover:opacity-90 text-white transition-colors;
+    @apply inline-flex items-center justify-center px-3 py-1 text-xs font-semibold rounded-full border border-transparent bg-down hover:opacity-90 text-white transition-colors;
   }
   .input {
-    @apply bg-panel-2 border border-border rounded-lg px-3 py-2 text-sm text-text outline-none focus:border-amber/60 transition-colors;
+    @apply bg-panel-2 border border-border rounded-lg px-2.5 py-1.5 text-sm text-text outline-none focus:border-amber/60 transition-colors;
   }
 }
 

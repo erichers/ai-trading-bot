@@ -80,9 +80,9 @@ function StatCell({
   big?: boolean;
 }) {
   return (
-    <div className="flex flex-col justify-center px-4 py-2 border-r border-border last:border-r-0 flex-1">
+    <div className="flex flex-col justify-center px-3 py-1.5 border-r border-border last:border-r-0 flex-1">
       <span className="micro-label">{label}</span>
-      <span className={`num ${big ? 'text-xl' : 'text-base'} ${tone ?? 'text-text'}`}>{value}</span>
+      <span className={`num ${big ? 'text-lg' : 'text-sm'} ${tone ?? 'text-text'}`}>{value}</span>
       {sub && <span className={`num text-2xs ${tone ?? 'text-text-dim'}`}>{sub}</span>}
     </div>
   );
@@ -621,8 +621,8 @@ export function Dashboard() {
         breakpoints={BREAKPOINTS}
         cols={COLS}
         rowHeight={ROW_HEIGHT}
-        margin={[12, 12]}
-        containerPadding={[4, 4]}
+        margin={[8, 8]}
+        containerPadding={[2, 2]}
         isDraggable={editing}
         isResizable={editing}
         draggableHandle=".drag-handle"

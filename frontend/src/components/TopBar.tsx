@@ -26,7 +26,7 @@ export function TopBar() {
   const dayPl = account?.day_pl ?? 0;
 
   return (
-    <header className="flex items-center gap-5 px-5 h-14 bg-black border-b border-border shrink-0">
+    <header className="flex items-center gap-4 px-4 h-12 bg-black border-b border-border shrink-0">
       {/* Logo */}
       <div className="flex items-center gap-2.5 shrink-0">
         <div className="w-2.5 h-2.5 bg-amber rounded-full" />

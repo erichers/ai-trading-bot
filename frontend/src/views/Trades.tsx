@@ -52,7 +52,7 @@ type SortKey = 'time' | 'symbol' | 'qty' | 'status';
 
 function StatBox({ label, value, tone = 'text-text' }: { label: string; value: string; tone?: string }) {
   return (
-    <div className="flex flex-col gap-0.5 px-3 py-1.5 border-r border-border last:border-r-0">
+    <div className="flex flex-col gap-0.5 px-2.5 py-1 border-r border-border last:border-r-0">
       <span className="micro-label">{label}</span>
       <span className={`num text-sm tabular-nums ${tone}`}>{value}</span>
     </div>
@@ -159,7 +159,7 @@ export function Trades() {
   };
 
   const SortHeader = ({ label, sortableKey, align = 'left' }: { label: string; sortableKey: SortKey; align?: 'left' | 'right' }) => (
-    <th className={`px-2 py-1.5 micro-label font-normal ${align === 'right' ? 'text-right' : 'text-left'}`}>
+    <th className={`px-2 py-1 micro-label font-normal ${align === 'right' ? 'text-right' : 'text-left'}`}>
       <button
         className={`inline-flex items-center gap-1 hover:text-text-dim ${sortKey === sortableKey ? 'text-amber' : ''}`}
         onClick={() => toggleSort(sortableKey)}
@@ -183,15 +183,15 @@ export function Trades() {
             <tr className="text-left text-muted border-b border-border">
               <SortHeader label="Time" sortableKey="time" />
               <SortHeader label="Symbol" sortableKey="symbol" />
-              <th className="px-2 py-1.5 micro-label font-normal">Class</th>
-              <th className="px-2 py-1.5 micro-label font-normal">Side</th>
+              <th className="px-2 py-1 micro-label font-normal">Class</th>
+              <th className="px-2 py-1 micro-label font-normal">Side</th>
               <SortHeader label="Qty / Filled" sortableKey="qty" align="right" />
-              <th className="px-2 py-1.5 micro-label font-normal">Type</th>
-              <th className="px-2 py-1.5 micro-label font-normal text-right">Limit</th>
-              <th className="px-2 py-1.5 micro-label font-normal text-right">Stop</th>
-              <th className="px-2 py-1.5 micro-label font-normal text-right">Fill Px</th>
+              <th className="px-2 py-1 micro-label font-normal">Type</th>
+              <th className="px-2 py-1 micro-label font-normal text-right">Limit</th>
+              <th className="px-2 py-1 micro-label font-normal text-right">Stop</th>
+              <th className="px-2 py-1 micro-label font-normal text-right">Fill Px</th>
               <SortHeader label="Status" sortableKey="status" />
-              <th className="px-2 py-1.5 micro-label font-normal">Source</th>
+              <th className="px-2 py-1 micro-label font-normal">Source</th>
             </tr>
           </thead>
           <tbody className="tabular-nums">
@@ -199,35 +199,35 @@ export function Trades() {
               const ts = t.submitted_at || t.created_at;
               return (
                 <tr key={t.id} className="border-b border-border/50 hover:bg-panel-2">
-                  <td className="px-2 py-1.5 font-mono whitespace-nowrap" title={ts ? timeAgo(ts) : ''}>
+                  <td className="px-2 py-1 font-mono whitespace-nowrap" title={ts ? timeAgo(ts) : ''}>
                     {ts ? timeOnly(ts) : '—'}
                     {ts && <span className="text-muted ml-1 text-2xs">{timeAgo(ts)}</span>}
                   </td>
-                  <td className="px-2 py-1.5 font-mono font-semibold text-text">{t.symbol}</td>
-                  <td className="px-2 py-1.5">
+                  <td className="px-2 py-1 font-mono font-semibold text-text">{t.symbol}</td>
+                  <td className="px-2 py-1">
                     <AssetClassBadge assetClass={t.asset_class} />
                   </td>
-                  <td className="px-2 py-1.5">
+                  <td className="px-2 py-1">
                     <SideBadge side={t.side} />
                   </td>
-                  <td className="px-2 py-1.5 text-right font-mono">
+                  <td className="px-2 py-1 text-right font-mono">
                     {num(t.qty, 0)}
                     <span className="text-muted"> / {num(t.filled_qty, 0)}</span>
                   </td>
-                  <td className="px-2 py-1.5 font-mono text-text-dim">{t.order_type}</td>
-                  <td className="px-2 py-1.5 text-right font-mono">
+                  <td className="px-2 py-1 font-mono text-text-dim">{t.order_type}</td>
+                  <td className="px-2 py-1 text-right font-mono">
                     {t.limit_price != null ? money(t.limit_price) : '—'}
                   </td>
-                  <td className="px-2 py-1.5 text-right font-mono">
+                  <td className="px-2 py-1 text-right font-mono">
                     {t.stop_price != null ? money(t.stop_price) : '—'}
                   </td>
-                  <td className="px-2 py-1.5 text-right font-mono">
+                  <td className="px-2 py-1 text-right font-mono">
                     {t.filled_avg_price != null ? money(t.filled_avg_price) : '—'}
                   </td>
-                  <td className="px-2 py-1.5">
+                  <td className="px-2 py-1">
                     <Badge tone={statusTone(t.status)}>{t.status}</Badge>
                   </td>
-                  <td className="px-2 py-1.5">
+                  <td className="px-2 py-1">
                     <div className="flex items-center gap-1">
                       <SourceBadge source={t.source} />
                       {t.strategy_id && (
@@ -293,7 +293,7 @@ export function Trades() {
   );
 
   return (
-    <div className="flex flex-col gap-3 p-3 h-full min-h-0">
+    <div className="flex flex-col gap-2 h-full min-h-0">
       <StatsStrip trades={all} />
       <Panel
         title="Trade Ledger"

@@ -105,9 +105,9 @@ function MetricCard({
   sub?: string;
 }) {
   return (
-    <div className="panel flex flex-col gap-1 px-3 py-2.5 min-w-0">
+    <div className="panel flex flex-col gap-0.5 px-2.5 py-1.5 min-w-0">
       <span className="micro-label">{label}</span>
-      <span className={`num text-lg tabular-nums leading-none ${tone}`}>{value}</span>
+      <span className={`num text-base tabular-nums leading-none ${tone}`}>{value}</span>
       {sub && <span className="text-2xs text-muted tabular-nums">{sub}</span>}
     </div>
   );
@@ -115,7 +115,7 @@ function MetricCard({
 
 function MetricsCards({ m }: { m: BacktestMetrics }) {
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-1.5">
       <MetricCard
         label="Total Return"
         value={pct(m.total_return_pct)}
@@ -161,41 +161,41 @@ function TradesTable({ trades }: { trades: BacktestTrade[] }) {
       <table className="w-full text-xs border-collapse">
         <thead className="sticky top-0 bg-panel z-10">
           <tr className="text-left text-muted border-b border-border">
-            <th className="px-2 py-1.5 micro-label font-normal">Symbol</th>
-            <th className="px-2 py-1.5 micro-label font-normal">Side</th>
-            <th className="px-2 py-1.5 micro-label font-normal">Entry</th>
-            <th className="px-2 py-1.5 micro-label font-normal text-right">Entry Px</th>
-            <th className="px-2 py-1.5 micro-label font-normal">Exit</th>
-            <th className="px-2 py-1.5 micro-label font-normal text-right">Exit Px</th>
-            <th className="px-2 py-1.5 micro-label font-normal text-right">P&amp;L %</th>
-            <th className="px-2 py-1.5 micro-label font-normal">Reason</th>
+            <th className="px-2 py-1 micro-label font-normal">Symbol</th>
+            <th className="px-2 py-1 micro-label font-normal">Side</th>
+            <th className="px-2 py-1 micro-label font-normal">Entry</th>
+            <th className="px-2 py-1 micro-label font-normal text-right">Entry Px</th>
+            <th className="px-2 py-1 micro-label font-normal">Exit</th>
+            <th className="px-2 py-1 micro-label font-normal text-right">Exit Px</th>
+            <th className="px-2 py-1 micro-label font-normal text-right">P&amp;L %</th>
+            <th className="px-2 py-1 micro-label font-normal">Reason</th>
           </tr>
         </thead>
         <tbody className="tabular-nums">
           {trades.map((t, i) => (
             <tr key={i} className="border-b border-border/50 hover:bg-panel-2">
-              <td className="px-2 py-1.5 font-mono font-semibold text-text">{t.symbol}</td>
-              <td className="px-2 py-1.5">
+              <td className="px-2 py-1 font-mono font-semibold text-text">{t.symbol}</td>
+              <td className="px-2 py-1">
                 <SideBadge side={t.side} right={t.right} />
               </td>
               <td
-                className="px-2 py-1.5 font-mono whitespace-nowrap text-text-dim"
+                className="px-2 py-1 font-mono whitespace-nowrap text-text-dim"
                 title={t.entry_time}
               >
                 {dateShort(t.entry_time)} {timeOnly(t.entry_time)}
               </td>
-              <td className="px-2 py-1.5 text-right font-mono">{money(t.entry_price)}</td>
+              <td className="px-2 py-1 text-right font-mono">{money(t.entry_price)}</td>
               <td
-                className="px-2 py-1.5 font-mono whitespace-nowrap text-text-dim"
+                className="px-2 py-1 font-mono whitespace-nowrap text-text-dim"
                 title={t.exit_time}
               >
                 {dateShort(t.exit_time)} {timeOnly(t.exit_time)}
               </td>
-              <td className="px-2 py-1.5 text-right font-mono">{money(t.exit_price)}</td>
-              <td className={`px-2 py-1.5 text-right font-mono font-semibold ${colorBySign(t.pnl_pct)}`}>
+              <td className="px-2 py-1 text-right font-mono">{money(t.exit_price)}</td>
+              <td className={`px-2 py-1 text-right font-mono font-semibold ${colorBySign(t.pnl_pct)}`}>
                 {pct(t.pnl_pct)}
               </td>
-              <td className="px-2 py-1.5 font-mono text-text-dim">{t.exit_reason || '—'}</td>
+              <td className="px-2 py-1 font-mono text-text-dim">{t.exit_reason || '—'}</td>
             </tr>
           ))}
         </tbody>
@@ -248,7 +248,7 @@ export function BacktestResults({
   }, [result, activePerSymbol]);
 
   return (
-    <div className="flex flex-col gap-3 flex-1 min-h-0">
+    <div className="flex flex-col gap-2 flex-1 min-h-0">
       {showHeader && (
         <div className="flex flex-wrap items-center gap-2 text-2xs text-muted">
           <span className="text-text-dim text-sm font-mono">{result.config_name}</span>
@@ -262,7 +262,7 @@ export function BacktestResults({
 
       {displayMetrics && <MetricsCards m={displayMetrics} />}
 
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-3 flex-1 min-h-0">
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-2 flex-1 min-h-0">
         <Panel
           title="Equity Curve"
           right={
@@ -270,7 +270,7 @@ export function BacktestResults({
               <Toggle value={symbolView} onChange={setSymbolView} options={symbolOptions} />
             ) : undefined
           }
-          className="min-h-[300px]"
+          className="min-h-[260px]"
           bodyClassName="min-h-0 p-1"
         >
           {chartPoints.length > 0 ? (
@@ -280,7 +280,7 @@ export function BacktestResults({
           )}
         </Panel>
 
-        <Panel title="Trades" className="min-h-[300px]" bodyClassName="min-h-0">
+        <Panel title="Trades" className="min-h-[260px]" bodyClassName="min-h-0">
           <TradesTable trades={allTrades} />
         </Panel>
       </div>

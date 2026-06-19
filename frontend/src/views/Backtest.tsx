@@ -157,8 +157,8 @@ export function Backtest() {
   // ---- selector row -------------------------------------------------------
 
   const selectorRow = (
-    <div className="panel p-3 flex flex-col gap-3">
-      <div className="flex flex-wrap items-end gap-3">
+    <div className="panel p-2.5 flex flex-col gap-2">
+      <div className="flex flex-wrap items-end gap-2.5">
         <div className="flex flex-col gap-1 min-w-[220px]">
           <span className="micro-label">Bot / Strategy</span>
           <select
@@ -213,7 +213,7 @@ export function Backtest() {
         </div>
 
         <button
-          className="btn-amber flex items-center gap-1.5 py-1.5 px-4"
+          className="btn-amber flex items-center gap-1.5"
           onClick={() => void run()}
           disabled={running || !selected}
         >
@@ -271,7 +271,7 @@ export function Backtest() {
   }
 
   return (
-    <div className="flex flex-col gap-3 h-full min-h-0">
+    <div className="flex flex-col gap-2 h-full min-h-0">
       <div className="flex items-center gap-2">
         <History size={16} className="text-amber" />
         <h1 className="text-sm micro-label text-text-dim">Backtest</h1>

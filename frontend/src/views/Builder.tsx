@@ -231,7 +231,7 @@ function Stepper({ step, onJump }: { step: number; onJump: (i: number) => void }
           <button
             key={label}
             onClick={() => onJump(i)}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-2xs uppercase tracking-wider transition-colors ${
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-2xs uppercase tracking-wider transition-colors ${
               active
                 ? 'border-transparent bg-amber text-black font-semibold'
                 : done
@@ -918,9 +918,9 @@ export function BuilderForm({
 
   // ---- render each step ----
   return (
-    <div className="p-4 flex flex-col gap-5 max-w-3xl">
+    <div className="p-2.5 flex flex-col gap-3 max-w-3xl">
       {/* header: stepper + cancel */}
-      <div className="flex flex-col gap-2.5">
+      <div className="flex flex-col gap-2">
         <div className="flex items-center justify-between gap-2 flex-wrap">
           <Stepper step={step} onJump={jump} />
           {onCancel && (
@@ -1335,7 +1335,7 @@ export function BuilderForm({
 
       {/* ---------------- STEP 3: Sizing & risk + mode ---------------- */}
       {step === 3 && (
-        <div className="flex flex-col gap-4">
+        <div className="flex flex-col gap-3">
           {/* Sizing & risk basics — how the three numbers relate */}
           <div className="rounded border border-amber/30 bg-amber/5 px-3 py-2 text-2xs text-text-dim leading-relaxed">
             <span className="micro-label text-amber flex items-center gap-1.5 mb-1">
