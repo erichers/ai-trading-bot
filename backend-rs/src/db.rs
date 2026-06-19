@@ -1137,13 +1137,14 @@ pub async fn count_deep_research_today(db: &Db) -> ApiResult<i64> {
     }
 }
 
-/// Orders placed (rows inserted into `trades`) since UTC midnight — used by the
-/// runaway-bot daily-order-cap failsafe.
+/// ENTRY orders (buy-side rows in `trades`) since UTC midnight — used by the
+/// runaway-bot daily-entry-cap failsafe. Counts only entries so exits never
+/// consume the cap.
 pub async fn count_trades_today(db: &Db) -> ApiResult<i64> {
     match db {
         Db::My(pool) => {
             let start = Utc::now().date_naive().and_hms_opt(0, 0, 0).unwrap();
-            let c: i64 = sqlx::query("SELECT COUNT(*) AS c FROM trades WHERE created_at >= ?")
+            let c: i64 = sqlx::query("SELECT COUNT(*) AS c FROM trades WHERE created_at >= ? AND LOWER(side) = 'buy'")
                 .bind(start)
                 .fetch_one(pool)
                 .await?
@@ -1156,7 +1157,7 @@ pub async fn count_trades_today(db: &Db) -> ApiResult<i64> {
                 .and_hms_opt(0, 0, 0)
                 .map(|d| DateTime::<Utc>::from_naive_utc_and_offset(d, Utc).to_rfc3339())
                 .unwrap();
-            let c: i64 = sqlx::query("SELECT COUNT(*) AS c FROM trades WHERE created_at >= ?")
+            let c: i64 = sqlx::query("SELECT COUNT(*) AS c FROM trades WHERE created_at >= ? AND LOWER(side) = 'buy'")
                 .bind(start)
                 .fetch_one(pool)
                 .await?
