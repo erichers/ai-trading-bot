@@ -17,10 +17,10 @@ import {
   History,
 } from 'lucide-react';
 import { api, ApiError } from '@/api/client';
-import type { Bot, BotMode, BotWorkerStatus, EvalResult } from '@/api/types';
+import type { Bot, BotMode, BotPerformance, BotWorkerStatus, EvalResult } from '@/api/types';
 import { Badge, ErrorState, HelpTip, Panel, Spinner, Toggle } from '@/components/ui';
 import { BotEvaluation } from '@/components/BotEvaluation';
-import { timeAgo } from '@/lib/format';
+import { timeAgo, money } from '@/lib/format';
 import { BuilderForm } from '@/views/Builder';
 
 const MODE_OPTIONS: { value: BotMode; label: string }[] = [
@@ -41,10 +41,12 @@ function BotRow({
   bot,
   onEdit,
   onChanged,
+  perf,
 }: {
   bot: Bot;
   onEdit: (b: Bot) => void;
   onChanged: () => void;
+  perf?: BotPerformance;
 }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false); // enable/mode/delete in flight
@@ -190,6 +192,21 @@ function BotRow({
             <span className="text-2xs text-muted">+{bot.symbols.length - 5}</span>
           )}
         </div>
+
+        {/* live performance rollup (real trades, not fabricated P&L) */}
+        {perf && perf.orders > 0 && (
+          <div className="flex items-center gap-2 mt-1 pl-5 text-2xs text-muted num">
+            <span className="text-text-dim">{perf.orders}</span> orders ·{' '}
+            <span className="text-text-dim">{perf.filled}</span> filled
+            {perf.orders > 0 && <span>({perf.fill_rate}%)</span>}
+            {perf.filled_notional > 0 && (
+              <>
+                {' '}· <span className="text-text-dim">{money(perf.filled_notional)}</span> traded
+              </>
+            )}
+            {perf.last_at && <span>· last {timeAgo(perf.last_at)}</span>}
+          </div>
+        )}
       </div>
 
       {/* expandable detail */}
@@ -394,6 +411,7 @@ export function BotSetup() {
   const [editing, setEditing] = useState<Bot | null>(null);
   const [creating, setCreating] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
+  const [perf, setPerf] = useState<Record<string, BotPerformance>>({});
 
   async function load() {
     setLoading(true);
@@ -408,6 +426,11 @@ export function BotSetup() {
     } finally {
       setLoading(false);
     }
+    // performance rollup (best-effort, non-blocking)
+    api
+      .botsPerformance()
+      .then((rows) => setPerf(Object.fromEntries(rows.map((r) => [r.bot_id, r]))))
+      .catch(() => {});
   }
 
   useEffect(() => {
@@ -518,7 +541,7 @@ export function BotSetup() {
         <div className="flex flex-col">
           <AutoRunner />
           {bots.map((b) => (
-            <BotRow key={b.id} bot={b} onEdit={openEdit} onChanged={() => void load()} />
+            <BotRow key={b.id} bot={b} onEdit={openEdit} onChanged={() => void load()} perf={perf[b.id]} />
           ))}
         </div>
       )}

@@ -800,6 +800,19 @@ export interface Backtest {
   note?: string;
 }
 
+export interface BotPerformance {
+  bot_id: string;
+  name: string;
+  enabled: boolean;
+  mode: BotMode;
+  orders: number;
+  filled: number;
+  fill_rate: number;
+  deployed: number;
+  filled_notional: number;
+  last_at: string | null;
+}
+
 export interface BotWorkerStatus {
   enabled: boolean;
   interval_sec: number;

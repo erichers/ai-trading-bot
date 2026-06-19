@@ -157,6 +157,7 @@ pub fn build_app(app_state: AppState) -> Router {
         .route("/bots/from-prompt", post(bot_from_prompt))
         .route("/bots/worker", get(bot_worker_status).put(bot_worker_update))
         .route("/bots/worker/run-once", post(bot_worker_run_once))
+        .route("/bots/performance", get(bots_performance))
         // backtest
         .route("/backtest", post(backtest_run))
         // research
@@ -985,6 +986,83 @@ async fn worker_update(State(s): State<AppState>, Json(body): Json<Value>) -> Js
 }
 async fn worker_run_once(State(s): State<AppState>) -> Json<Value> {
     Json(worker::run_once(&s).await)
+}
+
+// ---- per-bot performance attribution ----------------------------------------
+// Honest rollup from the real `trades` table grouped by strategy_id (= bot id).
+// We do NOT fabricate realized P&L (no closed-trade pairing) — we report actual
+// activity: orders, fills, fill rate, capital deployed, and last action.
+async fn bots_performance(State(s): State<AppState>) -> ApiResult<Json<Value>> {
+    use std::collections::HashMap;
+    let bots = db::list_bots(&s.pool).await?;
+    let trades = db::list_trades(&s.pool, None, None, 2000).await?;
+    let empty = vec![];
+
+    struct Agg {
+        orders: i64,
+        filled: i64,
+        deployed: f64,
+        filled_notional: f64,
+        last_at: String,
+    }
+    let mut by_bot: HashMap<String, Agg> = HashMap::new();
+    for t in trades.as_array().unwrap_or(&empty) {
+        let sid = t["strategy_id"].as_str().unwrap_or("");
+        if sid.is_empty() {
+            continue;
+        }
+        let a = by_bot.entry(sid.to_string()).or_insert(Agg {
+            orders: 0,
+            filled: 0,
+            deployed: 0.0,
+            filled_notional: 0.0,
+            last_at: String::new(),
+        });
+        a.orders += 1;
+        let status = t["status"].as_str().unwrap_or("").to_lowercase();
+        let mult = if t["asset_class"].as_str() == Some("option") { 100.0 } else { 1.0 };
+        let limit_px = t["limit_price"].as_f64().unwrap_or(0.0);
+        let qty = t["qty"].as_f64().unwrap_or(0.0);
+        a.deployed += limit_px * qty * mult;
+        if status.contains("fill") {
+            a.filled += 1;
+            let fpx = t["filled_avg_price"].as_f64().unwrap_or(0.0);
+            let fqty = t["filled_qty"].as_f64().unwrap_or(0.0);
+            a.filled_notional += fpx * fqty * mult;
+        }
+        let ts = t["submitted_at"].as_str().or_else(|| t["created_at"].as_str()).unwrap_or("");
+        if ts > a.last_at.as_str() {
+            a.last_at = ts.to_string();
+        }
+    }
+
+    let out: Vec<Value> = bots
+        .as_array()
+        .unwrap_or(&empty)
+        .iter()
+        .map(|b| {
+            let id = b["id"].as_str().unwrap_or("");
+            let a = by_bot.get(id);
+            let (orders, filled, deployed, notional, last_at) = match a {
+                Some(a) => (a.orders, a.filled, a.deployed, a.filled_notional, a.last_at.clone()),
+                None => (0, 0, 0.0, 0.0, String::new()),
+            };
+            let fill_rate = if orders > 0 { (filled as f64 / orders as f64 * 1000.0).round() / 10.0 } else { 0.0 };
+            json!({
+                "bot_id": id,
+                "name": b["name"],
+                "enabled": b["enabled"],
+                "mode": b["mode"],
+                "orders": orders,
+                "filled": filled,
+                "fill_rate": fill_rate,
+                "deployed": (deployed * 100.0).round() / 100.0,
+                "filled_notional": (notional * 100.0).round() / 100.0,
+                "last_at": if last_at.is_empty() { Value::Null } else { json!(last_at) },
+            })
+        })
+        .collect();
+    Ok(Json(Value::Array(out)))
 }
 
 // ---- bot scheduler (autonomous runner) --------------------------------------

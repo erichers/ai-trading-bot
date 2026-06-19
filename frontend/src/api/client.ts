@@ -9,6 +9,7 @@ import type {
   PortfolioHistory,
   BotStatus,
   BotWorkerStatus,
+  BotPerformance,
   Briefing,
   ChatHistoryMessage,
   ChatMessageTurn,
@@ -250,6 +251,7 @@ export const api = {
     }).then(normalizeEval),
   // Live status: last evaluation, mode, enabled. Degrades on 404/503.
   botStatus: (id: string) => request<BotStatus>(`/bots/${id}/status`),
+  botsPerformance: () => request<BotPerformance[]>('/bots/performance'),
   // Autonomous bot scheduler (background runner).
   botWorker: () => request<BotWorkerStatus>('/bots/worker'),
   botWorkerUpdate: (cfg: { enabled?: boolean; interval_sec?: number }) =>
