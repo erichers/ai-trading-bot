@@ -6,6 +6,7 @@ import {
   Ban,
   Calculator,
   Check,
+  Power,
   ShieldAlert,
   SlidersHorizontal,
 } from 'lucide-react';
@@ -19,7 +20,7 @@ import type {
 } from '@/api/types';
 import { usePolling } from '@/hooks/usePolling';
 import { useAppData } from '@/hooks/useAppData';
-import { Panel, Spinner, Empty, ErrorState, Badge, HelpTip } from '@/components/ui';
+import { Panel, Spinner, Empty, ErrorState, Badge, HelpTip, Toggle } from '@/components/ui';
 import { ContractLabel } from '@/components/ContractLabel';
 import { money, moneyCompact, num, pct, signed, colorBySign, timeOnly, timeAgo } from '@/lib/format';
 
@@ -235,6 +236,12 @@ const LIMIT_FIELDS: { key: keyof RiskLimits; label: string; step: number; help: 
     step: 1,
     help: 'Ignore signals in the first N minutes after the open, when spreads are wide and prices whipsaw. Higher = safer but you miss early momentum.',
   },
+  {
+    key: 'max_orders_per_day',
+    label: 'Max orders / day',
+    step: 1,
+    help: 'FAILSAFE: a hard ceiling on how many orders can be placed per day across everything — a backstop against a runaway bot or a loop. 0 disables the cap. New entries are blocked once reached.',
+  },
 ];
 
 // Prebuilt risk profiles — one-click presets that fill the limits (you still
@@ -372,6 +379,7 @@ function LimitsEditor() {
       for (const { key } of LIMIT_FIELDS) {
         payload[key] = draft[key] as never;
       }
+      payload.trading_enabled = draft.trading_enabled ?? true;
       const updated = await api.updateRiskLimits(payload);
       setDraft(updated);
       setSaved(true);
@@ -429,6 +437,48 @@ function LimitsEditor() {
         </span>
       }
     >
+      {/* Master trading failsafe */}
+      <div className="px-4 pt-4">
+        <div
+          className={`rounded-lg border px-3 py-2.5 flex items-center gap-3 ${
+            draft.trading_enabled === false ? 'border-down/50 bg-down/10' : 'border-up/40 bg-up/5'
+          }`}
+        >
+          <Power size={16} className={draft.trading_enabled === false ? 'text-down' : 'text-up'} />
+          <div className="flex-1">
+            <div className="flex items-center gap-1.5">
+              <span className="micro-label">Trading master switch</span>
+              <HelpTip title="Trading master switch">
+                A hard failsafe. When OFF, the risk engine vetoes <b>every</b> new entry (manual and bot),
+                while still allowing you to close positions. Use it to pause all new trading instantly
+                without engaging the full kill switch.
+              </HelpTip>
+            </div>
+            <p className="text-2xs text-muted mt-0.5">
+              {draft.trading_enabled === false
+                ? 'OFF — all new entries are blocked. Closing orders still allowed.'
+                : 'ON — new entries follow the limits below.'}
+            </p>
+          </div>
+          <Toggle
+            value={draft.trading_enabled === false ? 'off' : 'on'}
+            onChange={(v) => {
+              setSaved(false);
+              setDraft((d) => (d ? { ...d, trading_enabled: v === 'on' } : d));
+            }}
+            options={[
+              { value: 'on', label: 'On' },
+              { value: 'off', label: 'Off' },
+            ]}
+          />
+        </div>
+        {draft.trading_enabled === false && (
+          <div className="mt-2 rounded border border-down/40 bg-down/10 px-3 py-1.5 text-2xs text-down flex items-center gap-1.5">
+            <ShieldAlert size={12} /> Trading is paused. Remember to <b>Save</b> to apply, and turn it back On to resume.
+          </div>
+        )}
+      </div>
+
       {/* Prebuilt risk profiles — one-click presets */}
       <div className="px-4 pt-4">
         <div className="flex items-center gap-1.5 mb-2">

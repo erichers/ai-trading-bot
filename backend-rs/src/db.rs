@@ -320,6 +320,10 @@ pub fn default_limits() -> Value {
         "default_risk_per_trade_pct": 1,
         "skip_first_minutes": 5,
         "kill_switch_engaged": false,
+        // Master failsafe: when false, ALL new entries are blocked by the risk engine.
+        "trading_enabled": true,
+        // Failsafe: hard cap on orders placed per UTC day (runaway-bot backstop). 0 = no cap.
+        "max_orders_per_day": 50,
     })
 }
 
@@ -1118,6 +1122,35 @@ pub async fn count_deep_research_today(db: &Db) -> ApiResult<i64> {
                 .map(|d| DateTime::<Utc>::from_naive_utc_and_offset(d, Utc).to_rfc3339())
                 .unwrap();
             let c: i64 = sqlx::query("SELECT COUNT(*) AS c FROM deep_research WHERE created_at >= ?")
+                .bind(start)
+                .fetch_one(pool)
+                .await?
+                .try_get("c")?;
+            Ok(c)
+        }
+    }
+}
+
+/// Orders placed (rows inserted into `trades`) since UTC midnight — used by the
+/// runaway-bot daily-order-cap failsafe.
+pub async fn count_trades_today(db: &Db) -> ApiResult<i64> {
+    match db {
+        Db::My(pool) => {
+            let start = Utc::now().date_naive().and_hms_opt(0, 0, 0).unwrap();
+            let c: i64 = sqlx::query("SELECT COUNT(*) AS c FROM trades WHERE created_at >= ?")
+                .bind(start)
+                .fetch_one(pool)
+                .await?
+                .try_get("c")?;
+            Ok(c)
+        }
+        Db::Sq(pool) => {
+            let start = Utc::now()
+                .date_naive()
+                .and_hms_opt(0, 0, 0)
+                .map(|d| DateTime::<Utc>::from_naive_utc_and_offset(d, Utc).to_rfc3339())
+                .unwrap();
+            let c: i64 = sqlx::query("SELECT COUNT(*) AS c FROM trades WHERE created_at >= ?")
                 .bind(start)
                 .fetch_one(pool)
                 .await?

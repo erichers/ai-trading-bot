@@ -144,19 +144,28 @@ fn resolve_rhs(value: &Value, snapshot: &Value) -> Option<f64> {
 }
 
 fn apply_op(op: &str, a: f64, b: f64) -> bool {
+    // NOTE: crosses_above/below are NOT handled here — they need the previous bar
+    // and are resolved in evaluate_triggers. Treating them as plain >/< (the old
+    // bug) made them fire on every bar above/below the level.
     match op {
-        ">" | "crosses_above" | "above" => a > b,
-        "<" | "crosses_below" | "below" => a < b,
+        ">" | "above" => a > b,
+        "<" | "below" => a < b,
         ">=" => a >= b,
         "<=" => a <= b,
-        "==" | "eq" => (a - b).abs() < f64::EPSILON,
+        "==" | "eq" => (a - b).abs() < 1e-6,
         _ => false,
     }
 }
 
-/// Evaluate the bot's indicator rules against a snapshot that already includes
-/// `price`. Returns (trigger_result, [trigger explanations]).
-fn evaluate_triggers(rules: &[Value], snapshot: &Value) -> (bool, Vec<Value>) {
+/// Evaluate the bot's indicator rules against the current snapshot. `prev` is the
+/// previous-bar snapshot, required for true crosses_above/below detection (a cross
+/// fires only on the bar where the relationship flips). Returns
+/// (trigger_result, [trigger explanations]).
+fn evaluate_triggers(
+    rules: &[Value],
+    snapshot: &Value,
+    prev: Option<&Value>,
+) -> (bool, Vec<Value>) {
     if rules.is_empty() {
         // No rules configured → trigger gate is open (direction logic decides).
         return (true, vec![]);
@@ -176,7 +185,35 @@ fn evaluate_triggers(rules: &[Value], snapshot: &Value) -> (bool, Vec<Value>) {
         };
         let rhs_val = resolve_rhs(rhs, snapshot);
         let passed = match (lhs_val, rhs_val) {
-            (Some(l), Some(r)) => apply_op(op, l, r),
+            (Some(l), Some(r)) => {
+                if op == "crosses_above" || op == "crosses_below" {
+                    // Need prev lhs/rhs; if we don't have a previous bar, a cross
+                    // can't be confirmed → do not fire.
+                    match prev {
+                        Some(p) => {
+                            let lp = if ind.is_empty() {
+                                None
+                            } else {
+                                resolve_indicator(&indicator_path(ind), p)
+                            };
+                            let rp = resolve_rhs(rhs, p);
+                            match (lp, rp) {
+                                (Some(lp), Some(rp)) => {
+                                    if op == "crosses_above" {
+                                        lp <= rp && l > r
+                                    } else {
+                                        lp >= rp && l < r
+                                    }
+                                }
+                                _ => false,
+                            }
+                        }
+                        None => false,
+                    }
+                } else {
+                    apply_op(op, l, r)
+                }
+            }
             _ => false,
         };
         results.push((join, passed));
@@ -366,16 +403,32 @@ pub async fn evaluate_bot(state: &AppState, bot: &Value) -> Value {
                 continue;
             }
         };
-        let price = {
-            let p = num(&snapshot["price"], 0.0);
-            if p == 0.0 { 100.0 } else { p }
-        };
+        // NO MOCK DATA: a 0/unknown live price means real data is missing — skip
+        // rather than fabricating a price that could (de)trigger rules.
+        let price = num(&snapshot["price"], 0.0);
+        if price <= 0.0 {
+            proposals.push(skip_proposal(
+                &symbol,
+                "Live price unavailable (0) — skipped to avoid trading on bad data.",
+            ));
+            continue;
+        }
         // indicator snapshot with price merged in for rule resolution
         let mut rule_snap = ind.clone();
         rule_snap["price"] = json!((price * 10000.0).round() / 10000.0);
 
+        // Previous-bar snapshot so crosses_above/below can be detected correctly.
+        let prev_snap = if bars.len() >= 2 {
+            let mut ps = indicators::compute_all(&bars[..bars.len() - 1]);
+            let prev_close = num(&bars[bars.len() - 2]["c"], price);
+            ps["price"] = json!((prev_close * 10000.0).round() / 10000.0);
+            Some(ps)
+        } else {
+            None
+        };
+
         // --- 1) triggers --------------------------------------------------
-        let (trigger_result, triggers) = evaluate_triggers(&rules, &rule_snap);
+        let (trigger_result, triggers) = evaluate_triggers(&rules, &rule_snap, prev_snap.as_ref());
 
         // --- 2) AI gate ---------------------------------------------------
         let research = latest_research(state, &symbol).await;

@@ -147,11 +147,11 @@ function EquityStrip() {
       <StatCell
         label="Open Risk"
         value={moneyCompact(openRisk)}
-        sub="Σ (price − stop) × qty"
+        sub="est. @ −2% stop"
         tone="text-amber"
         big
         to="/risk"
-        help="Estimated dollars at risk across open positions if every protective stop hit. Opens the Risk dashboard."
+        help="ESTIMATE: positions carry no real protective stops yet, so this assumes a −2% stop on each. Opens the Risk dashboard."
       />
       <div className="drag-handle flex items-center px-3 border-l border-border" title="Drag to move">
         <GripVertical size={14} />

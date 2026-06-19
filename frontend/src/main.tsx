@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client';
 import { createBrowserRouter, RouterProvider } from 'react-router-dom';
 import './index.css';
 import { Layout } from './components/Layout';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { AppDataProvider } from './hooks/useAppData';
 import { SymbolProvider } from './hooks/useSymbol';
 import { Dashboard } from './views/Dashboard';
@@ -61,10 +62,12 @@ const router = createBrowserRouter(
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <AppDataProvider>
-      <SymbolProvider>
-        <RouterProvider router={router} />
-      </SymbolProvider>
-    </AppDataProvider>
+    <ErrorBoundary>
+      <AppDataProvider>
+        <SymbolProvider>
+          <RouterProvider router={router} />
+        </SymbolProvider>
+      </AppDataProvider>
+    </ErrorBoundary>
   </React.StrictMode>,
 );

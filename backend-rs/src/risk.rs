@@ -173,8 +173,18 @@ pub fn evaluate_order(
     let open_positions = open_symbols.len() as i64;
     let new_symbol = !open_symbols.contains(&match_symbol);
 
+    // ---- master failsafes ----
     if lim["kill_switch_engaged"].as_bool().unwrap_or(false) {
         vetoes.push(json!({"rule": "kill_switch", "message": "Kill switch engaged — all new orders blocked."}));
+    }
+    // Trading master switch: default true; only an explicit false disables.
+    if is_entry && !lim["trading_enabled"].as_bool().unwrap_or(true) {
+        vetoes.push(json!({"rule": "trading_disabled", "message": "Trading is disabled (master failsafe is OFF) — new entries blocked. Re-enable in Risk settings."}));
+    }
+    // Fail closed when we cannot size risk: a 0/unknown equity must NOT silently
+    // skip the percentage-based checks below.
+    if is_entry && equity <= 0.0 {
+        vetoes.push(json!({"rule": "equity_unavailable", "message": "Account equity is 0 or unavailable — cannot evaluate position/risk limits, so the entry is blocked."}));
     }
     if is_entry && day_pl_pct <= -(f(&lim["max_daily_loss_pct"], 0.0)).abs() {
         vetoes.push(json!({"rule": "circuit_breaker", "message": format!("Daily loss {:.2}% breached limit -{:.2}% — new entries blocked.", day_pl_pct, f(&lim["max_daily_loss_pct"], 0.0))}));

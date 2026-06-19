@@ -64,6 +64,8 @@ export interface NewOrder {
   stop_price?: number;
   take_profit?: number;
   stop_loss?: number;
+  /** Deliberate override: skip the risk-engine veto for this one order. */
+  bypass_risk?: boolean;
 }
 
 export interface Clock {
@@ -444,6 +446,9 @@ export interface RiskLimits {
   default_risk_per_trade_pct: number;
   skip_first_minutes: number;
   kill_switch_engaged: boolean;
+  // Failsafes
+  trading_enabled?: boolean;
+  max_orders_per_day?: number;
 }
 
 export interface RiskUtilization {

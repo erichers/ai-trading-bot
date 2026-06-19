@@ -351,23 +351,82 @@ async fn create_order(
         obj.remove("bypass_risk");
     }
 
+    // Evaluate risk. FAIL CLOSED: if any input (account/positions/limits) can't be
+    // fetched, we must NOT place an unevaluated order — that would silently disable
+    // the safety engine on a transient outage.
+    let acct_r = s.alpaca.get_account().await;
+    let pos_r = s.alpaca.get_positions().await;
+    let lim_r = db::get_risk_limits(&s.pool).await;
+
     let mut decision: Option<Value> = None;
-    if let (Ok(account), Ok(positions_v), Ok(limits)) = (
-        s.alpaca.get_account().await,
-        s.alpaca.get_positions().await,
-        db::get_risk_limits(&s.pool).await,
-    ) {
-        let positions = positions_v.as_array().cloned().unwrap_or_default();
-        let market_open = s.alpaca.market_open().await;
-        let day_trade_count = account["daytrade_count"].as_i64().unwrap_or(0);
-        decision = Some(risk::evaluate_order(
-            &payload,
-            &account,
-            &positions,
-            &limits,
-            market_open,
-            day_trade_count,
-        ));
+    let mut limits_for_cap: Option<Value> = None;
+    let mut risk_unavailable: Option<String> = None;
+    match (acct_r, pos_r, lim_r) {
+        (Ok(account), Ok(positions_v), Ok(limits)) => {
+            let positions = positions_v.as_array().cloned().unwrap_or_default();
+            let market_open = s.alpaca.market_open().await;
+            let day_trade_count = account["daytrade_count"].as_i64().unwrap_or(0);
+            decision = Some(risk::evaluate_order(
+                &payload,
+                &account,
+                &positions,
+                &limits,
+                market_open,
+                day_trade_count,
+            ));
+            limits_for_cap = Some(limits);
+        }
+        (a, p, l) => {
+            let mut which = vec![];
+            if a.is_err() { which.push("account"); }
+            if p.is_err() { which.push("positions"); }
+            if l.is_err() { which.push("risk limits"); }
+            risk_unavailable = Some(which.join(", "));
+        }
+    }
+
+    let is_entry = payload["side"].as_str().unwrap_or("buy").to_lowercase() == "buy";
+
+    // FAILSAFE: risk engine unavailable → block entries (closing orders still allowed).
+    if let Some(why) = &risk_unavailable {
+        if is_entry && !bypass {
+            let veto = json!([{ "rule": "risk_unavailable", "message": format!("Could not evaluate risk ({} unavailable) — entry blocked (fail-closed). Retry, or override deliberately.", why), "kind": "veto" }]);
+            let _ = db::insert_risk_event(&s.pool, &json!({
+                "symbol": payload["symbol"], "side": payload["side"], "qty": payload["qty"],
+                "order_type": payload["type"], "decision": "vetoed",
+                "rules": veto, "computed": json!({}), "source": source,
+            })).await;
+            return Ok(Json(json!({
+                "rejected": true, "decision": "vetoed",
+                "vetoes": [{ "rule": "risk_unavailable", "message": format!("Risk checks unavailable ({}). Order blocked to stay safe.", why) }],
+                "risk_unavailable": true,
+            })));
+        }
+        tracing::warn!("create_order: risk unavailable ({why}) but proceeding (bypass={bypass}, entry={is_entry})");
+    }
+
+    // FAILSAFE: hard daily-order cap (runaway-bot backstop).
+    if is_entry {
+        let cap = limits_for_cap
+            .as_ref()
+            .map(|l| l["max_orders_per_day"].as_i64().unwrap_or(0))
+            .unwrap_or(0);
+        if cap > 0 {
+            if let Ok(today) = db::count_trades_today(&s.pool).await {
+                if today >= cap && !bypass {
+                    let veto = json!([{ "rule": "max_orders_per_day", "message": format!("Daily order cap reached ({today}/{cap}) — new entries blocked. Raise the cap in Risk settings or override.", ), "kind": "veto" }]);
+                    let _ = db::insert_risk_event(&s.pool, &json!({
+                        "symbol": payload["symbol"], "side": payload["side"], "qty": payload["qty"],
+                        "order_type": payload["type"], "decision": "vetoed",
+                        "rules": veto, "computed": json!({"orders_today": today, "cap": cap}), "source": source,
+                    })).await;
+                    return Ok(Json(json!({
+                        "rejected": true, "decision": "vetoed",
+                        "vetoes": [{ "rule": "max_orders_per_day", "message": format!("Daily order cap reached ({today}/{cap}).") }],
+                    })));
+                }
+            }
+        }
     }
 
     if let Some(d) = &decision {

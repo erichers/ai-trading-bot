@@ -112,7 +112,11 @@ function PositionsTable({
             <th className="px-2 py-1.5 micro-label font-normal text-right">Mkt Val</th>
             <th className="px-2 py-1.5 micro-label font-normal text-right">Unrl P&L</th>
             <th className="px-2 py-1.5 micro-label font-normal text-right">Chg Today</th>
-            <th className="px-2 py-1.5 micro-label font-normal">Stop / Target</th>
+            <th className="px-2 py-1.5 micro-label font-normal">
+              <span className="inline-flex items-center gap-1">
+                Stop / Target <span className="text-muted normal-case">(est.)</span>
+              </span>
+            </th>
             <th className="px-2 py-1.5 micro-label font-normal text-right">Actions</th>
           </tr>
         </thead>
@@ -344,6 +348,7 @@ function OrderTicket({ onSubmitted, prefill }: { onSubmitted: () => void; prefil
   const [bracketOpen, setBracketOpen] = useState(false);
   const [takeProfit, setTakeProfit] = useState('');
   const [stopLoss, setStopLoss] = useState('');
+  const [override, setOverride] = useState(false); // bypass risk engine (deliberate)
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
@@ -384,6 +389,7 @@ function OrderTicket({ onSubmitted, prefill }: { onSubmitted: () => void; prefil
       if (needsStop) order.stop_price = Number(stopPrice);
       if (bracketOpen && Number(takeProfit) > 0) order.take_profit = Number(takeProfit);
       if (bracketOpen && Number(stopLoss) > 0) order.stop_loss = Number(stopLoss);
+      if (override) order.bypass_risk = true;
 
       setBusy(true);
       try {
@@ -394,6 +400,7 @@ function OrderTicket({ onSubmitted, prefill }: { onSubmitted: () => void; prefil
         setStopPrice('');
         setTakeProfit('');
         setStopLoss('');
+        setOverride(false);
         onSubmitted();
       } catch (e2) {
         setErr(e2 instanceof ApiError ? e2.message : 'Order failed');
@@ -401,7 +408,7 @@ function OrderTicket({ onSubmitted, prefill }: { onSubmitted: () => void; prefil
         setBusy(false);
       }
     },
-    [symbol, qty, side, type, tif, limitPrice, stopPrice, bracketOpen, takeProfit, stopLoss, needsLimit, needsStop, onSubmitted],
+    [symbol, qty, side, type, tif, limitPrice, stopPrice, bracketOpen, takeProfit, stopLoss, override, needsLimit, needsStop, onSubmitted],
   );
 
   return (
@@ -554,15 +561,41 @@ function OrderTicket({ onSubmitted, prefill }: { onSubmitted: () => void; prefil
           )}
         </div>
 
+        {/* Deliberate override of the risk engine */}
+        <label
+          className={`flex items-start gap-2 mt-1 rounded border px-2 py-1.5 cursor-pointer ${
+            override ? 'border-down/50 bg-down/10' : 'border-border'
+          }`}
+        >
+          <input
+            type="checkbox"
+            className="accent-[#FF5000] mt-0.5"
+            checked={override}
+            onChange={(e) => setOverride(e.target.checked)}
+          />
+          <span className="text-2xs leading-relaxed">
+            <span className={override ? 'text-down font-semibold' : 'text-text-dim'}>
+              Override risk checks
+            </span>
+            <span className="text-muted">
+              {' '}
+              — place this order even if the risk engine vetoes it. The override is logged. Only use if
+              you understand the risk.
+            </span>
+          </span>
+        </label>
+
         {err && <div className="text-down text-2xs">{err}</div>}
         {ok && <div className="text-up text-2xs">{ok}</div>}
 
         <button
           type="submit"
           disabled={busy}
-          className={`${side === 'sell' ? 'btn' : 'btn-amber'} mt-1 disabled:opacity-50`}
+          className={`${override ? 'btn-danger' : side === 'sell' ? 'btn' : 'btn-amber'} mt-1 disabled:opacity-50`}
         >
-          {busy ? 'Submitting…' : `${side === 'buy' ? 'Buy' : 'Sell'} ${symbol || ''}`.trim()}
+          {busy
+            ? 'Submitting…'
+            : `${override ? '⚠ Override ' : ''}${side === 'buy' ? 'Buy' : 'Sell'} ${symbol || ''}`.trim()}
         </button>
       </form>
     </Panel>

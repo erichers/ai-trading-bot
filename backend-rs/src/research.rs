@@ -119,35 +119,63 @@ fn num(v: &Value, default: f64) -> f64 {
 }
 
 fn coerce(data: &Value, symbol: &str, snapshot: &Value, provider: &str, model: &str) -> Value {
-    let price = {
-        let p = num(&snapshot["price"], 100.0);
-        if p == 0.0 {
-            100.0
-        } else {
-            p
-        }
-    };
+    let price = num(&snapshot["price"], 0.0);
     let mut risks: Vec<Value> = match &data["key_risks"] {
         Value::Array(a) => a.iter().map(|r| json!(r.as_str().map(|s| s.to_string()).unwrap_or_else(|| r.to_string()))).collect(),
         Value::String(s) => vec![json!(s)],
         _ => vec![],
     };
     risks.truncate(8);
-    let sentiment = num(&data["sentiment_score"], 0.0).clamp(-1.0, 1.0);
-    let conviction = num(&data["conviction"], 50.0).clamp(0.0, 100.0);
+
+    // NO MOCK DATA: do not invent missing fields. Track what the model omitted so
+    // consumers (e.g. the bot AI gate) can fail-safe instead of trusting fabricated
+    // confidence. Conviction defaults to 0 (gate will not pass on it), and
+    // stop/target stay null unless the model actually provided them.
+    let mut degraded: Vec<&str> = vec![];
+    let thesis = data["thesis"].as_str().unwrap_or("").trim().to_string();
+    if thesis.is_empty() {
+        degraded.push("thesis");
+    }
+    let sentiment = if data["sentiment_score"].is_null() {
+        degraded.push("sentiment_score");
+        0.0
+    } else {
+        num(&data["sentiment_score"], 0.0).clamp(-1.0, 1.0)
+    };
+    let conviction = if data["conviction"].is_null() {
+        degraded.push("conviction");
+        0.0
+    } else {
+        num(&data["conviction"], 0.0).clamp(0.0, 100.0)
+    };
+    // Only carry a stop/target the model actually returned (and only if we know price).
+    let suggested_stop = if data["suggested_stop"].is_null() {
+        Value::Null
+    } else {
+        json!((num(&data["suggested_stop"], 0.0) * 100.0).round() / 100.0)
+    };
+    let suggested_target = if data["suggested_target"].is_null() {
+        Value::Null
+    } else {
+        json!((num(&data["suggested_target"], 0.0) * 100.0).round() / 100.0)
+    };
+    let _ = price;
+
     json!({
         "symbol": symbol,
-        "thesis": data["thesis"].as_str().unwrap_or("").trim(),
+        "thesis": thesis,
         "sentiment_score": sentiment,
         "conviction": conviction,
         "key_risks": risks,
         "suggested_action": data["suggested_action"].as_str().unwrap_or("hold").to_lowercase(),
-        "suggested_stop": num(&data["suggested_stop"], (price * 0.95 * 100.0).round() / 100.0),
-        "suggested_target": num(&data["suggested_target"], (price * 1.08 * 100.0).round() / 100.0),
-        "regime": data["regime"].as_str().unwrap_or("range"),
+        "suggested_stop": suggested_stop,
+        "suggested_target": suggested_target,
+        "regime": data["regime"].as_str().unwrap_or("unknown"),
         "bear_case": data["bear_case"].as_str().unwrap_or("").trim(),
         "provider": provider,
         "model": model,
+        "degraded": !degraded.is_empty(),
+        "degraded_fields": degraded,
         "generated_at": now(),
     })
 }
@@ -191,6 +219,12 @@ pub async fn analyze(
             Ok((content, model)) => match parse_json_loose(&content) {
                 Ok(data) => {
                     let mut result = coerce(&data, &symbol, &snapshot, prov, &model);
+                    // Reject a hollow analysis (no thesis) — try the next provider
+                    // rather than returning fabricated/empty content as real.
+                    if result["thesis"].as_str().unwrap_or("").trim().is_empty() {
+                        last_err = format!("{prov} returned an empty/invalid analysis");
+                        continue;
+                    }
                     result["depth"] = json!(depth);
                     return Ok(result);
                 }
