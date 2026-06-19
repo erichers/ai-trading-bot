@@ -1,8 +1,137 @@
 import { useState } from 'react';
-import { Check, X, ChevronDown, ChevronRight, ShieldAlert, ShieldCheck } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import {
+  Check,
+  X,
+  ChevronDown,
+  ChevronRight,
+  ShieldAlert,
+  ShieldCheck,
+  Wrench,
+  ArrowRight,
+  Clock,
+} from 'lucide-react';
 import type { EvalItem, EvalResult } from '@/api/types';
-import { Badge, Empty } from '@/components/ui';
+import { Badge, Empty, HelpTip } from '@/components/ui';
 import { money, num } from '@/lib/format';
+
+const MONTHS = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December',
+];
+
+// Parse an OCC option symbol → its parts. e.g. QQQ260622C00742000
+function parseOcc(occ: string): { right: 'call' | 'put'; year: number; month: number; day: number; strike: number } | null {
+  const m = occ?.match(/^([A-Z]+)(\d{2})(\d{2})(\d{2})([CP])(\d{8})$/);
+  if (!m) return null;
+  return {
+    year: 2000 + parseInt(m[2], 10),
+    month: parseInt(m[3], 10),
+    day: parseInt(m[4], 10),
+    right: m[5] === 'C' ? 'call' : 'put',
+    strike: parseInt(m[6], 10) / 1000,
+  };
+}
+
+// Days-to-expiration from a YYYY-MM-DD (or ISO) string, local-date based.
+function daysToExpiry(expiration: string): number | null {
+  const m = expiration?.match(/(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return null;
+  const exp = new Date(+m[1], +m[2] - 1, +m[3]);
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  return Math.round((exp.getTime() - today.getTime()) / 86_400_000);
+}
+
+function dteLabel(dte: number | null): string {
+  if (dte === null) return '';
+  if (dte < 0) return 'expired';
+  if (dte === 0) return 'expires today';
+  return `${dte} DTE`;
+}
+
+// Build a plain-English contract line: "June 22 · $742 Call · 3 DTE".
+function humanContract(c: { occ: string; strike: number; expiration: string }, fallbackRight?: 'call' | 'put'): {
+  human: string;
+  dte: number | null;
+  right: 'call' | 'put' | null;
+} | null {
+  const parsed = parseOcc(c.occ);
+  const right = parsed?.right ?? fallbackRight ?? null;
+  const strike = parsed?.strike ?? c.strike;
+
+  // Prefer the explicit expiration field; fall back to the parsed OCC date.
+  let year = parsed?.year, month = parsed?.month, day = parsed?.day;
+  const em = c.expiration?.match(/(\d{4})-(\d{2})-(\d{2})/);
+  if (em) {
+    year = +em[1];
+    month = +em[2];
+    day = +em[3];
+  }
+  if (!month || !day) return null;
+
+  const dte = c.expiration ? daysToExpiry(c.expiration) : daysToExpiry(`${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`);
+  const strikeStr = `$${strike % 1 === 0 ? strike.toFixed(0) : strike}`;
+  const rightStr = right ? right.charAt(0).toUpperCase() + right.slice(1) : 'Option';
+  const parts = [`${MONTHS[month - 1]} ${day}`, `${strikeStr} ${rightStr}`];
+  const d = dteLabel(dte);
+  if (d) parts.push(d);
+  return { human: parts.join(' · '), dte, right };
+}
+
+// Actionable "how to fix" for a non-firing symbol. Triggers-not-met is normal
+// (not a problem), so it gets a calm explanation rather than an alarm.
+interface FixHint {
+  tone: 'info' | 'action';
+  text: string;
+  cta?: { label: string; to: string };
+}
+function suggestFix(item: NormItem): FixHint | null {
+  if (item.firing) return null;
+
+  // 1) Risk vetoes — the most actionable blockers.
+  if (item.risk && !item.risk.approved && item.risk.vetoes.length) {
+    const v = item.risk.vetoes[0];
+    if (/max_open_positions/i.test(v.rule)) {
+      return {
+        tone: 'action',
+        text: 'At your max open-positions limit. Close a position to free a slot, or raise the limit in Risk settings.',
+        cta: { label: 'Review positions', to: '/positions' },
+      };
+    }
+    return {
+      tone: 'action',
+      text: `Risk blocked this: ${v.message}. Adjust the limit in Risk settings if intended.`,
+      cta: { label: 'Open Risk settings', to: '/risk' },
+    };
+  }
+
+  // 2) AI gate too strict.
+  if (item.aiGate && item.aiGate.enabled && !item.aiGate.passed) {
+    return {
+      tone: 'action',
+      text: `AI conviction ${num(item.aiGate.conviction, 0)} is below your gate of ${num(item.aiGate.min, 0)}. Lower the AI-gate minimum, or turn the gate off to trade on the technical triggers alone.`,
+    };
+  }
+
+  // 3) No directional bias.
+  if (item.direction && item.direction.right === 'skip') {
+    return {
+      tone: 'info',
+      text: 'The AI sees no clear call/put bias right now. The bot waits for a directional setup — nothing to fix.',
+    };
+  }
+
+  // 4) Triggers simply not met yet — the normal, healthy waiting state.
+  if (item.triggerResult === false) {
+    return {
+      tone: 'info',
+      text: 'Entry conditions haven’t triggered yet — this is normal. The bot keeps watching and fires automatically the moment your triggers are met. Loosen a trigger in the Builder if it never fires.',
+    };
+  }
+
+  return { tone: 'info', text: item.reason };
+}
 
 // ==========================================================================
 //  Shared rich evaluation renderer.
@@ -140,6 +269,7 @@ function PassFail({ ok }: { ok: boolean }) {
 
 function EvalRow({ item }: { item: NormItem }) {
   const [open, setOpen] = useState(false);
+  const fix = suggestFix(item);
   const hasDetail =
     item.triggers.length > 0 || item.aiGate || item.direction || item.contract || item.risk;
   return (
@@ -164,6 +294,11 @@ function EvalRow({ item }: { item: NormItem }) {
         <span className={`text-2xs flex-1 truncate ${item.firing ? 'text-up' : 'text-muted'}`}>
           {item.reason}
         </span>
+        {!item.firing && fix?.tone === 'action' && (
+          <span className="flex items-center gap-1 text-2xs text-amber shrink-0">
+            <Wrench size={11} /> Fix
+          </span>
+        )}
         {item.direction && item.direction.right !== 'skip' && (
           <Badge tone={item.direction.right === 'call' ? 'up' : 'down'}>
             {item.direction.right}
@@ -181,6 +316,10 @@ function EvalRow({ item }: { item: NormItem }) {
                 <Badge tone={item.triggerResult ? 'up' : 'down'}>
                   {item.triggerResult ? 'met' : 'not met'}
                 </Badge>
+                <HelpTip title="Entry triggers">
+                  Your technical conditions. <b>All</b> must pass (green ✓) for the bot to consider an
+                  entry. <b>Target</b> is what you set; <b>Actual</b> is the live indicator value right now.
+                </HelpTip>
               </div>
               <table className="w-full text-xs">
                 <thead>
@@ -220,7 +359,14 @@ function EvalRow({ item }: { item: NormItem }) {
           {/* AI gate */}
           {item.aiGate && (
             <div>
-              <div className="micro-label mb-1">AI gate</div>
+              <div className="micro-label mb-1 flex items-center gap-1">
+                AI gate
+                <HelpTip title="AI gate">
+                  A second opinion from the research model. After your triggers pass, the bot only enters
+                  if AI <b>conviction</b> clears your <b>minimum</b>. Raise it to be more selective; lower
+                  it (or disable) to trade on the technicals alone.
+                </HelpTip>
+              </div>
               {item.aiGate.enabled ? (
                 <div className="flex items-center gap-2">
                   <PassFail ok={item.aiGate.passed} />
@@ -259,7 +405,13 @@ function EvalRow({ item }: { item: NormItem }) {
           {/* Direction */}
           {item.direction && (
             <div>
-              <div className="micro-label mb-1">Direction</div>
+              <div className="micro-label mb-1 flex items-center gap-1">
+                Direction
+                <HelpTip title="Direction">
+                  Which side the bot trades. <b>Call</b> = bullish, <b>Put</b> = bearish, <b>Skip</b> = no
+                  clear bias so it stands aside. Driven by your bot’s configured side and the AI’s read.
+                </HelpTip>
+              </div>
               <div className="flex items-center gap-2">
                 <Badge
                   tone={
@@ -284,17 +436,64 @@ function EvalRow({ item }: { item: NormItem }) {
           {/* Contract */}
           {item.contract && (
             <div>
-              <div className="micro-label mb-1">Selected contract</div>
-              <div className="text-xs font-mono text-text-dim flex flex-wrap items-center gap-x-2 gap-y-0.5">
-                <span className="text-amber">{item.contract.occ}</span>
-                <span>
-                  {money(item.contract.strike)} · {item.contract.expiration}
-                </span>
-                <span>mid {money(item.contract.mid)}</span>
-                {item.contract.delta !== undefined && <span>Δ {num(item.contract.delta)}</span>}
+              <div className="micro-label mb-1 flex items-center gap-1">
+                Selected contract
+                <HelpTip title="Contract">
+                  The exact option the bot would buy. <b>DTE</b> = days to expiration (lower = cheaper but faster
+                  time decay). <b>Mid</b> is the midpoint price per share (×100 = cost per contract).{' '}
+                  <b>Δ</b> (delta) ≈ how much the option moves per $1 in the stock, and roughly its
+                  probability of finishing in-the-money.
+                </HelpTip>
               </div>
+              {(() => {
+                const h = humanContract(item.contract!, item.direction?.right === 'skip' ? undefined : item.direction?.right);
+                const tone =
+                  h?.right === 'call' ? 'text-up' : h?.right === 'put' ? 'text-down' : 'text-text';
+                return (
+                  <>
+                    {h && (
+                      <div className={`text-sm font-semibold flex items-center gap-1.5 ${tone}`}>
+                        {h.dte !== null && h.dte <= 2 && <Clock size={12} className="text-amber shrink-0" />}
+                        {h.human}
+                      </div>
+                    )}
+                    <div className="text-2xs font-mono text-muted flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-0.5">
+                      <span>{item.contract.occ}</span>
+                      <span>mid {money(item.contract.mid)}</span>
+                      <span>≈ {money(item.contract.mid * 100)}/contract</span>
+                      {item.contract.delta !== undefined && <span>Δ {num(item.contract.delta)}</span>}
+                    </div>
+                  </>
+                );
+              })()}
             </div>
           )}
+
+          {/* How to fix — actionable guidance when this symbol isn't firing */}
+          {(() => {
+            if (!fix) return null;
+            const isAction = fix.tone === 'action';
+            return (
+              <div
+                className={`rounded-lg border px-2.5 py-2 flex items-start gap-2 ${
+                  isAction ? 'border-amber/40 bg-amber/10' : 'border-border bg-bg/40'
+                }`}
+              >
+                <Wrench size={13} className={`shrink-0 mt-0.5 ${isAction ? 'text-amber' : 'text-muted'}`} />
+                <div className="flex flex-col gap-1.5 flex-1">
+                  <span className="text-2xs leading-relaxed text-text-dim">{fix.text}</span>
+                  {fix.cta && (
+                    <Link
+                      to={fix.cta.to}
+                      className="btn-amber self-start flex items-center gap-1 !py-0.5"
+                    >
+                      {fix.cta.label} <ArrowRight size={11} />
+                    </Link>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Risk */}
           {item.risk && (
