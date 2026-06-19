@@ -11,11 +11,21 @@ export interface LiveQuote {
 
 export type WSStatus = 'connecting' | 'open' | 'closed';
 
+export interface LiveNotification {
+  level: 'info' | 'success' | 'warning' | 'error';
+  title: string;
+  message: string;
+  ts: string;
+  category?: string;
+  id: number;
+}
+
 interface WSHook {
   status: WSStatus;
   quotes: Record<string, LiveQuote>;
   lastNews: NewsItem | null;
   lastSignal: WSMessage | null;
+  lastNotification: LiveNotification | null;
 }
 
 /**
@@ -27,6 +37,8 @@ export function useWebSocket(): WSHook {
   const [quotes, setQuotes] = useState<Record<string, LiveQuote>>({});
   const [lastNews, setLastNews] = useState<NewsItem | null>(null);
   const [lastSignal, setLastSignal] = useState<WSMessage | null>(null);
+  const [lastNotification, setLastNotification] = useState<LiveNotification | null>(null);
+  const notifId = useRef(0);
 
   const wsRef = useRef<WebSocket | null>(null);
   const attemptRef = useRef(0);
@@ -78,6 +90,15 @@ export function useWebSocket(): WSHook {
         setLastNews(msg as unknown as NewsItem);
       } else if (msg.type === 'signal') {
         setLastSignal(msg);
+      } else if (msg.type === 'notification') {
+        setLastNotification({
+          level: (msg.level as LiveNotification['level']) ?? 'info',
+          title: String(msg.title ?? 'Update'),
+          message: String(msg.message ?? ''),
+          ts: String(msg.ts ?? ''),
+          category: msg.category as string | undefined,
+          id: ++notifId.current,
+        });
       }
     };
 
@@ -110,5 +131,5 @@ export function useWebSocket(): WSHook {
     };
   }, [connect]);
 
-  return { status, quotes, lastNews, lastSignal };
+  return { status, quotes, lastNews, lastSignal, lastNotification };
 }

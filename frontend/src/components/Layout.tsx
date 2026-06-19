@@ -3,6 +3,7 @@ import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { AlertOctagon, Ban } from 'lucide-react';
 import { TopBar } from './TopBar';
 import { LeftRail } from './LeftRail';
+import { Toaster } from './Toaster';
 import { DisconnectedBanner } from './ui';
 import { useAppData } from '@/hooks/useAppData';
 
@@ -58,6 +59,7 @@ export function Layout() {
           <Outlet />
         </main>
       </div>
+      <Toaster />
     </div>
   );
 }

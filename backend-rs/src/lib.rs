@@ -86,11 +86,13 @@ pub async fn init_state(settings: Arc<Settings>) -> anyhow::Result<AppState> {
 
     let alpaca = alpaca::Alpaca::new(settings.clone());
     let llm = llm::Llm::new(settings.clone());
+    let (events, _) = tokio::sync::broadcast::channel(256);
     Ok(AppState {
         settings,
         pool,
         alpaca,
         llm,
+        events,
     })
 }
 
@@ -440,6 +442,13 @@ async fn create_order(
                 "order_type": payload["type"], "decision": "vetoed",
                 "rules": build_risk_rules(d), "computed": d["computed"], "source": source,
             })).await;
+            let veto_msg = d["vetoes"][0]["message"].as_str().unwrap_or("blocked by risk engine").to_string();
+            s.notify(
+                "warning",
+                "Order vetoed",
+                &format!("{} {} — {}", payload["side"].as_str().unwrap_or("?"), payload["symbol"].as_str().unwrap_or("?"), veto_msg),
+                json!({"symbol": payload["symbol"], "category": "risk"}),
+            );
             return Ok(Json(json!({
                 "rejected": true, "decision": "vetoed",
                 "vetoes": d["vetoes"], "computed": d["computed"], "risk": d,
@@ -478,6 +487,19 @@ async fn create_order(
         })).await;
         result["risk"] = d.clone();
     }
+    let qty_str = result["qty"].as_str().map(|s| s.to_string()).unwrap_or_else(|| payload["qty"].to_string());
+    s.notify(
+        "success",
+        "Order placed",
+        &format!(
+            "{} {} ×{} — {}",
+            result["side"].as_str().unwrap_or("?"),
+            result["symbol"].as_str().unwrap_or("?"),
+            qty_str,
+            result["status"].as_str().unwrap_or("submitted"),
+        ),
+        json!({"symbol": result["symbol"], "category": "order", "bypass": bypass}),
+    );
     Ok(Json(result))
 }
 

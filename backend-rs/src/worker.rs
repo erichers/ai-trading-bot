@@ -167,47 +167,67 @@ pub fn start(state: AppState) {
 }
 
 // ---- Realtime websocket -----------------------------------------------------
+async fn push_quotes(socket: &mut WebSocket, state: &AppState) -> Result<(), ()> {
+    let watchlist = db::get_watchlist(&state.pool).await.unwrap_or_default();
+    let ts = Utc::now().to_rfc3339();
+    let snaps = match state.alpaca.get_snapshots(&watchlist).await {
+        Ok(s) => s,
+        Err(_) => {
+            let msg = json!({"type": "status", "message": "Real-time market data temporarily unavailable.", "ts": ts});
+            return socket.send(Message::Text(msg.to_string())).await.map_err(|_| ());
+        }
+    };
+    for sym in &watchlist {
+        let snap = &snaps[sym];
+        if snap.is_null() {
+            continue;
+        }
+        let price = snap["price"].as_f64().unwrap_or(0.0);
+        if price == 0.0 {
+            continue;
+        }
+        let spread = (price * 0.0005).max(0.01);
+        let msg = json!({
+            "type": "quote",
+            "symbol": sym,
+            "price": (price * 100.0).round() / 100.0,
+            "change_pct": snap["change_pct"].as_f64().unwrap_or(0.0),
+            "bid": ((price - spread) * 100.0).round() / 100.0,
+            "ask": ((price + spread) * 100.0).round() / 100.0,
+            "ts": ts,
+        });
+        socket.send(Message::Text(msg.to_string())).await.map_err(|_| ())?;
+    }
+    Ok(())
+}
+
 pub async fn realtime_run(mut socket: WebSocket, state: AppState) {
+    // Subscribe to the notification bus so fills / vetoes / bot actions reach the
+    // client immediately, interleaved with the periodic quote pushes.
+    let mut rx = state.events.subscribe();
+    let mut tick = tokio::time::interval(std::time::Duration::from_secs(2));
+    // push an initial batch right away
+    if push_quotes(&mut socket, &state).await.is_err() {
+        return;
+    }
     loop {
-        let watchlist = match db::get_watchlist(&state.pool).await {
-            Ok(w) => w,
-            Err(_) => vec![],
-        };
-        let ts = Utc::now().to_rfc3339();
-        let snaps = match state.alpaca.get_snapshots(&watchlist).await {
-            Ok(s) => s,
-            Err(_) => {
-                let msg = json!({"type": "status", "message": "Real-time market data temporarily unavailable.", "ts": ts});
-                if socket.send(Message::Text(msg.to_string())).await.is_err() {
+        tokio::select! {
+            _ = tick.tick() => {
+                if push_quotes(&mut socket, &state).await.is_err() {
                     return;
                 }
-                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                continue;
             }
-        };
-        for sym in &watchlist {
-            let snap = &snaps[sym];
-            if snap.is_null() {
-                continue;
-            }
-            let price = snap["price"].as_f64().unwrap_or(0.0);
-            if price == 0.0 {
-                continue;
-            }
-            let spread = (price * 0.0005).max(0.01);
-            let msg = json!({
-                "type": "quote",
-                "symbol": sym,
-                "price": (price * 100.0).round() / 100.0,
-                "change_pct": snap["change_pct"].as_f64().unwrap_or(0.0),
-                "bid": ((price - spread) * 100.0).round() / 100.0,
-                "ask": ((price + spread) * 100.0).round() / 100.0,
-                "ts": ts,
-            });
-            if socket.send(Message::Text(msg.to_string())).await.is_err() {
-                return;
+            ev = rx.recv() => {
+                match ev {
+                    Ok(v) => {
+                        if socket.send(Message::Text(v.to_string())).await.is_err() {
+                            return;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => { /* dropped some — fine */ }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+                }
             }
         }
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     }
 }

@@ -829,7 +829,7 @@ export interface PortfolioHistory {
 }
 
 export interface WSMessage {
-  type: 'quote' | 'news' | 'signal';
+  type: 'quote' | 'news' | 'signal' | 'notification' | 'status';
   [key: string]: unknown;
 }
 

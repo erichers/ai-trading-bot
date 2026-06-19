@@ -744,6 +744,18 @@ pub async fn run_bot(state: &AppState, bot: &Value, place: bool) -> Value {
                     "computed": p["risk"]["computed"], "source": "bot",
                 })).await;
                 orders_today += 1;
+                state.notify(
+                    "success",
+                    "Bot fired 🤖",
+                    &format!(
+                        "{} bought {} ×{} ({})",
+                        bot["name"].as_str().unwrap_or("Bot"),
+                        p["symbol"].as_str().unwrap_or("?"),
+                        p["qty"],
+                        ack["status"].as_str().unwrap_or("submitted"),
+                    ),
+                    json!({"symbol": p["symbol"], "category": "bot", "bot_id": bot_id}),
+                );
                 place_notes.push(format!("{}: order submitted ({}).", p["symbol"].as_str().unwrap_or("?"), ack["status"].as_str().unwrap_or("?")));
                 placed.push(ack);
             }

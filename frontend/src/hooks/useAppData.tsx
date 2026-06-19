@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useMemo, type ReactNode } from 
 import { api } from '@/api/client';
 import type { Account, Clock, Health, Position, RiskStatus } from '@/api/types';
 import { usePolling } from './usePolling';
-import { useWebSocket, type WSStatus, type LiveQuote } from './useWebSocket';
+import { useWebSocket, type WSStatus, type LiveQuote, type LiveNotification } from './useWebSocket';
 
 interface AppData {
   health: Health | undefined;
@@ -17,6 +17,7 @@ interface AppData {
   removeWatch: (symbol: string) => Promise<void>;
   wsStatus: WSStatus;
   quotes: Record<string, LiveQuote>;
+  lastNotification: LiveNotification | null;
   backendDown: boolean;
   // Computed open risk = sum (current - stop)*qty; we approximate stop via
   // saved local stops or fall back to 2% below entry when unknown.
@@ -35,7 +36,7 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
   const clockQ = usePolling<Clock>(() => api.clock(), 30000);
   const watchQ = usePolling<string[]>(() => api.watchlist(), 30000);
   const riskQ = usePolling<RiskStatus>(() => api.riskStatus(), 5000);
-  const { status: wsStatus, quotes } = useWebSocket();
+  const { status: wsStatus, quotes, lastNotification } = useWebSocket();
 
   const positions = positionsQ.data ?? [];
   const watchlist = watchQ.data ?? [];
@@ -85,6 +86,7 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
       removeWatch,
       wsStatus,
       quotes,
+      lastNotification,
       backendDown,
       openRisk,
       riskStatus: riskQ.data,
@@ -103,6 +105,7 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
       removeWatch,
       wsStatus,
       quotes,
+      lastNotification,
       backendDown,
       openRisk,
       riskQ.data,
