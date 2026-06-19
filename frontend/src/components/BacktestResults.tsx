@@ -181,6 +181,26 @@ function MetricsCards({ m }: { m: BacktestMetrics }) {
           sub={pct(m.avg_loss_pct)}
         />
       </div>
+      {/* Risk-adjusted (net of fees + slippage) */}
+      {m.sharpe !== undefined && (
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
+          <MetricCard
+            label="Sharpe (per trade)"
+            value={num(m.sharpe, 2)}
+            tone={(m.sharpe ?? 0) > 0 ? 'text-up' : 'text-down'}
+          />
+          <MetricCard
+            label="Sortino (per trade)"
+            value={Number.isFinite(m.sortino) && (m.sortino ?? 0) < 900 ? num(m.sortino, 2) : '∞'}
+            tone={(m.sortino ?? 0) > 0 ? 'text-up' : 'text-down'}
+          />
+          <MetricCard
+            label="Expectancy / trade"
+            value={signedMoney(m.expectancy_dollars)}
+            tone={colorBySign(m.expectancy_dollars ?? 0)}
+          />
+        </div>
+      )}
     </div>
   );
 }
@@ -331,6 +351,11 @@ export function BacktestResults({
         </Panel>
       </div>
 
+      {(result.slippage_bps !== undefined || result.commission !== undefined) && (
+        <div className="text-2xs text-muted px-1">
+          Net of costs: {result.slippage_bps ?? 0} bps slippage/side · {money(result.commission ?? 0)} commission/trade.
+        </div>
+      )}
       {result.note && (
         <div className="panel px-3 py-2 text-2xs text-amber/90 micro-label border border-amber/30 bg-amber/5">
           {result.note}

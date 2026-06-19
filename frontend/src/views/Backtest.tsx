@@ -47,6 +47,8 @@ export function Backtest() {
   const [timeframe, setTimeframe] = useState<string>(''); // '' = use config default
   const [accountSize, setAccountSize] = useState<number>(10_000); // starting cash
   const [cashPerTrade, setCashPerTrade] = useState<number>(1_000); // max bet per trade
+  const [slippageBps, setSlippageBps] = useState<number>(25); // per-side slippage (bps)
+  const [commission, setCommission] = useState<number>(1.3); // round-trip commission ($)
 
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -131,6 +133,8 @@ export function Backtest() {
       const cash = {
         account_size: accountSize > 0 ? accountSize : 10_000,
         cash_per_trade: cashPerTrade > 0 ? cashPerTrade : undefined,
+        slippage_bps: slippageBps >= 0 ? slippageBps : undefined,
+        commission: commission >= 0 ? commission : undefined,
       };
       const body =
         target.kind === 'bot'
@@ -301,11 +305,50 @@ export function Backtest() {
           </div>
         </div>
 
-        <span className="text-2xs text-muted ml-auto max-w-[260px] leading-relaxed">
+        {/* realistic costs */}
+        <div className="flex flex-col gap-1">
+          <span className="micro-label flex items-center gap-1">
+            Slippage (bps/side)
+            <HelpTip title="Slippage">
+              Execution cost from the bid/ask spread, in basis points per side (100 bps = 1%). Options have
+              wide spreads — 25+ bps/side is realistic. Applied round-trip to every trade.
+            </HelpTip>
+          </span>
+          <input
+            type="number"
+            min={0}
+            step={5}
+            className="input w-24 py-1.5"
+            value={slippageBps}
+            onChange={(e) => setSlippageBps(Number(e.target.value))}
+          />
+        </div>
+        <div className="flex flex-col gap-1">
+          <span className="micro-label flex items-center gap-1">
+            Commission ($/trade)
+            <HelpTip title="Commission">
+              Flat fee per round-trip trade. Equity is commission-free on Alpaca; options are ~$0.65/contract
+              each way (~$1.30 round trip).
+            </HelpTip>
+          </span>
+          <div className="relative">
+            <span className="absolute left-2 top-1/2 -translate-y-1/2 text-muted text-xs">$</span>
+            <input
+              type="number"
+              min={0}
+              step={0.1}
+              className="input w-24 pl-5 py-1.5"
+              value={commission}
+              onChange={(e) => setCommission(Number(e.target.value))}
+            />
+          </div>
+        </div>
+
+        <span className="text-2xs text-muted ml-auto max-w-[240px] leading-relaxed">
           Betting <span className="text-text-dim num">{money(cashPerTrade)}</span> per trade —{' '}
           {accountSize > 0 ? `${((cashPerTrade / accountSize) * 100).toFixed(1)}% of ` : ''}
-          <span className="text-text-dim num">{money(accountSize)}</span>. Results below show the actual
-          cash gained/lost.
+          <span className="text-text-dim num">{money(accountSize)}</span>. Results are{' '}
+          <span className="text-text-dim">net of fees &amp; slippage</span>.
         </span>
       </div>
     </div>

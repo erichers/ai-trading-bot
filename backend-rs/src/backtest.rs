@@ -33,6 +33,16 @@ fn round4(v: f64) -> f64 {
     (v * 10000.0).round() / 10000.0
 }
 
+/// Apply realistic costs to a gross trade return: subtract round-trip slippage
+/// (bps × 2) from the % return and a flat commission from the dollar P&L.
+/// Returns (net_pnl_pct, net_pnl_dollars).
+fn net_trade(cfg: &BtConfig, gross_pnl_pct: f64) -> (f64, f64) {
+    let slip_pct = cfg.slippage_bps / 100.0 * 2.0; // both sides
+    let net_pct = gross_pnl_pct - slip_pct;
+    let net_dollars = cfg.cash_per_trade * net_pct / 100.0 - cfg.commission;
+    (round4(net_pct), round2(net_dollars))
+}
+
 // ---- lookback mapping -------------------------------------------------------
 
 /// Approximate number of TRADING days for a lookback window.
@@ -235,6 +245,10 @@ struct BtConfig {
     account_size: f64,
     /// cash deployed per trade (the "max bet" the user is willing to risk per setup)
     cash_per_trade: f64,
+    /// per-side slippage in basis points applied to the entry/exit fill
+    slippage_bps: f64,
+    /// flat commission charged per round-trip trade (dollars)
+    commission: f64,
 }
 
 fn resolve_side_right(action: &Value, config: &Value, rules: &[Value]) -> (String, Option<String>, bool, f64) {
@@ -361,6 +375,16 @@ fn build_config(body: &Value, loaded: Option<&Value>) -> Result<BtConfig, ApiErr
         let v = if raw > 0.0 { raw } else { account_size * 0.10 };
         v.min(account_size) // can't bet more than the account holds
     };
+    // Realistic costs. Defaults reflect retail options (wide spreads ~ a few bps,
+    // ~$0.65/contract each way → ~$1.30 round trip); equity defaults to commission-free.
+    let slippage_bps = {
+        let v = num(&body["slippage_bps"], if is_option { 25.0 } else { 5.0 });
+        v.max(0.0)
+    };
+    let commission = {
+        let v = num(&body["commission"], if is_option { 1.30 } else { 0.0 });
+        v.max(0.0)
+    };
 
     Ok(BtConfig {
         name,
@@ -375,6 +399,8 @@ fn build_config(body: &Value, loaded: Option<&Value>) -> Result<BtConfig, ApiErr
         target_pct,
         account_size,
         cash_per_trade,
+        slippage_bps,
+        commission,
     })
 }
 
@@ -407,6 +433,7 @@ fn metrics(trades: &[Trade], account_size: f64) -> Value {
             "starting_equity": round2(account_size), "ending_equity": round2(account_size),
             "total_pnl_dollars": 0.0, "total_traded_dollars": 0.0,
             "avg_win_dollars": 0.0, "avg_loss_dollars": 0.0,
+            "sharpe": 0.0, "sortino": 0.0, "expectancy_dollars": 0.0,
         });
     }
     let mut wins = 0usize;
@@ -464,6 +491,22 @@ fn metrics(trades: &[Trade], account_size: f64) -> Value {
     };
     let avg_win_pct = if wins > 0 { round2(win_sum / wins as f64) } else { 0.0 };
     let avg_loss_pct = if losses > 0 { round2(loss_sum / losses as f64) } else { 0.0 };
+
+    // Risk-adjusted return from per-trade % returns: Sharpe = mean/std, Sortino
+    // uses downside deviation only. Per-trade (not annualized) — labelled as such.
+    let rets: Vec<f64> = trades.iter().map(|t| t.pnl_pct).collect();
+    let n = rets.len() as f64;
+    let mean = rets.iter().sum::<f64>() / n;
+    let var = rets.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / n;
+    let std = var.sqrt();
+    let downside = {
+        let neg: Vec<f64> = rets.iter().filter(|r| **r < 0.0).map(|r| r.powi(2)).collect();
+        if neg.is_empty() { 0.0 } else { (neg.iter().sum::<f64>() / n).sqrt() }
+    };
+    let sharpe = if std > 0.0 { round2(mean / std) } else { 0.0 };
+    let sortino = if downside > 0.0 { round2(mean / downside) } else if mean > 0.0 { 999.99 } else { 0.0 };
+    let expectancy = round2(total_pnl_dollars / num_trades as f64);
+
     json!({
         "total_return_pct": total_return_pct,
         "win_rate": win_rate,
@@ -480,6 +523,9 @@ fn metrics(trades: &[Trade], account_size: f64) -> Value {
         "total_traded_dollars": round2(total_traded_dollars),
         "avg_win_dollars": if wins > 0 { round2(win_dollars / wins as f64) } else { 0.0 },
         "avg_loss_dollars": if losses > 0 { round2(loss_dollars / losses as f64) } else { 0.0 },
+        "sharpe": sharpe,
+        "sortino": sortino,
+        "expectancy_dollars": expectancy,
     })
 }
 
@@ -635,6 +681,8 @@ pub async fn run_backtest(state: &AppState, body: &Value) -> ApiResult<Value> {
         "is_option": cfg.is_option,
         "account_size": round2(cfg.account_size),
         "cash_per_trade": round2(cfg.cash_per_trade),
+        "slippage_bps": cfg.slippage_bps,
+        "commission": cfg.commission,
         "combined": combine_metrics(&all_trades, cfg.account_size),
         "per_symbol": per_symbol,
         "note": NOTE,
@@ -697,7 +745,8 @@ fn simulate_symbol_windowed(cfg: &BtConfig, bars: &[Value], warmup_cut: usize, s
                 exit = Some((close, "opposite_signal"));
             }
             if let Some((exit_price, reason)) = exit {
-                let pnl_pct = round4((exit_price - entry_price) / entry_price * 100.0 * pos_dir * scale);
+                let gross_pct = (exit_price - entry_price) / entry_price * 100.0 * pos_dir * scale;
+                let (pnl_pct, pnl_dollars) = net_trade(cfg, gross_pct);
                 trades.push(Trade {
                     side: pos_side.clone(),
                     entry_time: entry_time.clone(),
@@ -706,7 +755,7 @@ fn simulate_symbol_windowed(cfg: &BtConfig, bars: &[Value], warmup_cut: usize, s
                     exit_price: round4(exit_price),
                     pnl_pct,
                     cash_deployed: cfg.cash_per_trade,
-                    pnl_dollars: round2(cfg.cash_per_trade * pnl_pct / 100.0),
+                    pnl_dollars,
                     exit_reason: reason.to_string(),
                 });
                 open_pos = None;
@@ -728,7 +777,8 @@ fn simulate_symbol_windowed(cfg: &BtConfig, bars: &[Value], warmup_cut: usize, s
         let exit_price = num(&last["c"], entry_price);
         let t = last["t"].as_str().unwrap_or("").to_string();
         let pos_dir = if pos_side == "short" { -1.0 } else { 1.0 };
-        let pnl_pct = round4((exit_price - entry_price) / entry_price * 100.0 * pos_dir * scale);
+        let gross_pct = (exit_price - entry_price) / entry_price * 100.0 * pos_dir * scale;
+        let (pnl_pct, pnl_dollars) = net_trade(cfg, gross_pct);
         trades.push(Trade {
             side: pos_side.clone(),
             entry_time,
@@ -737,7 +787,7 @@ fn simulate_symbol_windowed(cfg: &BtConfig, bars: &[Value], warmup_cut: usize, s
             exit_price: round4(exit_price),
             pnl_pct,
             cash_deployed: cfg.cash_per_trade,
-            pnl_dollars: round2(cfg.cash_per_trade * pnl_pct / 100.0),
+            pnl_dollars,
             exit_reason: "end_of_window".to_string(),
         });
     }

@@ -731,6 +731,10 @@ export interface BacktestRequest {
   account_size?: number;
   /** Cash deployed per trade — the "max bet" per setup (default 10% of account). */
   cash_per_trade?: number;
+  /** Per-side slippage in basis points. */
+  slippage_bps?: number;
+  /** Flat commission per round-trip trade ($). */
+  commission?: number;
 }
 
 export interface BacktestMetrics {
@@ -750,6 +754,9 @@ export interface BacktestMetrics {
   total_traded_dollars?: number;
   avg_win_dollars?: number;
   avg_loss_dollars?: number;
+  sharpe?: number;
+  sortino?: number;
+  expectancy_dollars?: number;
 }
 
 export interface BacktestEquityPoint {
@@ -786,6 +793,8 @@ export interface Backtest {
   end: string;
   account_size?: number;
   cash_per_trade?: number;
+  slippage_bps?: number;
+  commission?: number;
   combined: BacktestMetrics;
   per_symbol: BacktestPerSymbol[];
   note?: string;
