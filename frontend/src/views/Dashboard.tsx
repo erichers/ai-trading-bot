@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { X, Sparkles, ChevronDown, ChevronRight, Zap, GripVertical, RotateCcw, Move, Check, Lock } from 'lucide-react';
+import { X, Sparkles, ChevronDown, ChevronRight, Zap, GripVertical, RotateCcw, Move, Check, Lock, ArrowUpRight } from 'lucide-react';
 import * as RGLNamespace from 'react-grid-layout';
 
 // react-grid-layout's CJS exposes Responsive/WidthProvider as NAMED exports;
@@ -33,7 +33,7 @@ import { CandleChart, type Overlay } from '@/components/CandleChart';
 import { Sparkline } from '@/components/Sparkline';
 import { BotSetup } from '@/components/BotSetup';
 import { ContractLabel } from '@/components/ContractLabel';
-import { Panel, Spinner, Empty, ErrorState, Badge, Toggle } from '@/components/ui';
+import { Panel, Spinner, Empty, ErrorState, Badge, Toggle, HelpTip } from '@/components/ui';
 import {
   money,
   moneyCompact,
@@ -73,41 +73,77 @@ function StatCell({
   sub,
   tone,
   big,
+  to,
+  help,
 }: {
   label: string;
   value: string;
   sub?: string;
   tone?: string;
   big?: boolean;
+  to?: string;
+  help?: React.ReactNode;
 }) {
-  return (
-    <div className="flex flex-col justify-center px-3 py-1.5 border-r border-border last:border-r-0 flex-1">
-      <span className="micro-label">{label}</span>
+  const inner = (
+    <>
+      <span className="micro-label flex items-center gap-1">
+        {label}
+        {help && <HelpTip title={label}>{help}</HelpTip>}
+        {to && <ArrowUpRight size={10} className="text-muted group-hover:text-amber transition-colors" />}
+      </span>
       <span className={`num ${big ? 'text-lg' : 'text-sm'} ${tone ?? 'text-text'}`}>{value}</span>
       {sub && <span className={`num text-2xs ${tone ?? 'text-text-dim'}`}>{sub}</span>}
-    </div>
+    </>
   );
+  const cls = 'flex flex-col justify-center px-3 py-1.5 border-r border-border last:border-r-0 flex-1';
+  if (to) {
+    return (
+      <Link to={to} className={`group ${cls} hover:bg-panel-2 transition-colors`}>
+        {inner}
+      </Link>
+    );
+  }
+  return <div className={cls}>{inner}</div>;
 }
 
 function EquityStrip() {
   const { account, openRisk } = useAppData();
   return (
     <div className="panel flex flex-row items-stretch h-full">
-      <StatCell label="Equity" value={money(account?.equity ?? null)} />
-      <StatCell label="Buying Power" value={money(account?.buying_power ?? null)} />
+      <StatCell
+        label="Equity"
+        value={money(account?.equity ?? null)}
+        to="/portfolio"
+        help="Total account value (cash + positions). Opens your Portfolio with the equity curve, allocation and holdings."
+      />
+      <StatCell
+        label="Buying Power"
+        value={money(account?.buying_power ?? null)}
+        to="/buying-power"
+        help="What you can deploy into new positions now. Opens the Buying Power breakdown, reserved orders and education."
+      />
       <StatCell
         label="Day P&L"
         value={signed(account?.day_pl)}
         sub={pct(account?.day_pl_pct)}
         tone={colorBySign(account?.day_pl)}
+        to="/pnl"
+        help="Change in equity since the previous close. Opens P&L history with a date-range picker and per-period breakdown."
       />
-      <StatCell label="Cash" value={money(account?.cash ?? null)} />
+      <StatCell
+        label="Cash"
+        value={money(account?.cash ?? null)}
+        to="/buying-power"
+        help="Settled + unsettled cash not currently invested. Buying power can exceed this on a margin account."
+      />
       <StatCell
         label="Open Risk"
         value={moneyCompact(openRisk)}
         sub="Σ (price − stop) × qty"
         tone="text-amber"
         big
+        to="/risk"
+        help="Estimated dollars at risk across open positions if every protective stop hit. Opens the Risk dashboard."
       />
       <div className="drag-handle flex items-center px-3 border-l border-border" title="Drag to move">
         <GripVertical size={14} />

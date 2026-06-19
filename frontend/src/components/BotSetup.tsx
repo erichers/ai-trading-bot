@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Plus,
   Bot as BotIcon,
@@ -318,6 +318,7 @@ export function BotSetup() {
   // editing === null + creating === false → list view.
   const [editing, setEditing] = useState<Bot | null>(null);
   const [creating, setCreating] = useState(false);
+  const [searchParams, setSearchParams] = useSearchParams();
 
   async function load() {
     setLoading(true);
@@ -337,6 +338,21 @@ export function BotSetup() {
   useEffect(() => {
     void load();
   }, []);
+
+  // Deep-link from the Trades page: ?editBot=<id> opens that bot's editor once loaded.
+  useEffect(() => {
+    const id = searchParams.get('editBot');
+    if (!id || bots.length === 0) return;
+    const bot = bots.find((b) => b.id === id);
+    if (bot) {
+      setCreating(false);
+      setEditing(bot);
+    }
+    const next = new URLSearchParams(searchParams);
+    next.delete('editBot');
+    setSearchParams(next, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bots]);
 
   const enabledCount = useMemo(() => bots.filter((b) => b.enabled).length, [bots]);
   const inBuilder = creating || editing !== null;

@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   AlertOctagon,
+  ArrowUpRight,
   Ban,
   Calculator,
   Check,
@@ -29,13 +31,16 @@ function utilTone(p: number): { bar: string; text: string } {
   return { bar: 'bg-up', text: 'text-up' };
 }
 
-function UtilBar({ label, value }: { label: string; value: number }) {
+function UtilBar({ label, value, help }: { label: string; value: number; help?: React.ReactNode }) {
   const v = Number.isFinite(value) ? Math.max(0, value) : 0;
   const tone = utilTone(v);
   return (
     <div className="flex flex-col gap-1">
       <div className="flex items-center justify-between">
-        <span className="micro-label">{label}</span>
+        <span className="micro-label flex items-center gap-1">
+          {label}
+          {help && <HelpTip title={label}>{help}</HelpTip>}
+        </span>
         <span className={`num text-xs ${tone.text}`}>{pct(v, 0)}</span>
       </div>
       <div className="h-2 bg-bg-2 rounded overflow-hidden">
@@ -50,19 +55,34 @@ function BigStat({
   value,
   sub,
   tone,
+  to,
 }: {
   label: string;
   value: string;
   sub?: string;
   tone?: string;
+  to?: string;
 }) {
-  return (
-    <div className="flex flex-col justify-center px-4 py-2 border-r border-border last:border-r-0 flex-1 min-w-[140px]">
-      <span className="micro-label">{label}</span>
+  const inner = (
+    <>
+      <span className="micro-label flex items-center gap-1">
+        {label}
+        {to && <ArrowUpRight size={11} className="text-muted group-hover:text-amber transition-colors" />}
+      </span>
       <span className={`num text-2xl leading-tight ${tone ?? 'text-text'}`}>{value}</span>
       {sub && <span className="num text-2xs text-text-dim">{sub}</span>}
-    </div>
+    </>
   );
+  const cls =
+    'flex flex-col justify-center px-4 py-2 border-r border-border last:border-r-0 flex-1 min-w-[140px]';
+  if (to) {
+    return (
+      <Link to={to} className={`group ${cls} hover:bg-panel-2 transition-colors`}>
+        {inner}
+      </Link>
+    );
+  }
+  return <div className={cls}>{inner}</div>;
 }
 
 // ---- status header strip -------------------------------------------------
@@ -117,20 +137,43 @@ function StatusStrip() {
           value={signed(status.day_pl)}
           sub={`${pct(status.day_pl_pct)} · CB at ${pct(-status.limits.max_daily_loss_pct, 1)}`}
           tone={colorBySign(status.day_pl)}
+          to="/pnl"
         />
         <BigStat
           label="Open Positions"
           value={`${num(status.open_positions, 0)} / ${num(status.max_open_positions, 0)}`}
+          to="/positions"
         />
-        <BigStat label="Equity" value={money(status.equity)} />
-        <BigStat label="Buying Power" value={money(status.buying_power)} />
+        <BigStat label="Equity" value={money(status.equity)} to="/portfolio" />
+        <BigStat label="Buying Power" value={money(status.buying_power)} to="/buying-power" />
       </div>
 
-      <Panel title="Utilization">
+      <Panel
+        title="Utilization"
+        right={
+          <HelpTip title="Utilization">
+            How much of each risk budget is currently in use. <span className="text-up">Green</span> = headroom,{' '}
+            <span className="text-amber">amber</span> ≥ 70%, <span className="text-down">red</span> ≥ 90% — when a bar
+            fills, that limit starts vetoing new orders.
+          </HelpTip>
+        }
+      >
         <div className="p-4 grid grid-cols-1 sm:grid-cols-3 gap-5">
-          <UtilBar label="Position Slots" value={u.position_slots_used_pct} />
-          <UtilBar label="Buying Power" value={u.buying_power_used_pct} />
-          <UtilBar label="Daily Loss" value={u.daily_loss_used_pct} />
+          <UtilBar
+            label="Position Slots"
+            value={u.position_slots_used_pct}
+            help="Open positions ÷ your “Max open positions” limit. At 100% the next entry is vetoed until one closes."
+          />
+          <UtilBar
+            label="Buying Power"
+            value={u.buying_power_used_pct}
+            help="Share of your buying power already deployed in positions + reserved by open orders. High = little dry powder left."
+          />
+          <UtilBar
+            label="Daily Loss"
+            value={u.daily_loss_used_pct}
+            help="Today’s loss as a share of your “Max daily loss” limit. At 100% the circuit breaker trips and blocks all new entries for the day."
+          />
         </div>
       </Panel>
     </div>

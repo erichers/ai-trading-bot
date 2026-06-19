@@ -6,6 +6,7 @@ import type {
   Bar,
   Bot,
   BotFromPromptResponse,
+  PortfolioHistory,
   BotStatus,
   Briefing,
   ChatHistoryMessage,
@@ -98,6 +99,8 @@ const qs = (params: Record<string, string | number | undefined>): string => {
 export const api = {
   health: () => request<Health>('/health'),
   account: () => request<Account>('/account'),
+  portfolioHistory: (period = '1M', timeframe?: string) =>
+    request<PortfolioHistory>(`/account/portfolio-history${qs({ period, timeframe })}`),
   positions: () => request<Position[]>('/positions'),
 
   orders: (status: 'open' | 'closed' | 'all' = 'open') =>

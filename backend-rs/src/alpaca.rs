@@ -141,6 +141,56 @@ impl Alpaca {
         }))
     }
 
+    // ---- portfolio history (real Alpaca equity/P&L curve) -------------------
+    // period: 1D/1W/1M/3M/1A/all ; timeframe: 1Min/5Min/15Min/1H/1D
+    pub async fn get_portfolio_history(
+        &self,
+        period: &str,
+        timeframe: &str,
+    ) -> ApiResult<Value> {
+        let q = vec![
+            ("period", period.to_string()),
+            ("timeframe", timeframe.to_string()),
+            ("intraday_reporting", "market_hours".to_string()),
+            ("pnl_reset", "per_day".to_string()),
+        ];
+        let h = self.get_trading("account/portfolio/history", &q).await?;
+        // Zip timestamp/equity/profit_loss arrays into points; carry base value.
+        let ts = h["timestamp"].as_array().cloned().unwrap_or_default();
+        let eq = h["equity"].as_array().cloned().unwrap_or_default();
+        let pl = h["profit_loss"].as_array().cloned().unwrap_or_default();
+        let plpct = h["profit_loss_pct"].as_array().cloned().unwrap_or_default();
+        let points: Vec<Value> = ts
+            .iter()
+            .enumerate()
+            .filter_map(|(i, t)| {
+                let sec = t.as_i64()?;
+                let equity = eq.get(i).and_then(|v| v.as_f64());
+                // skip gaps where Alpaca reports null equity
+                equity.map(|e| {
+                    json!({
+                        "t": sec,
+                        "equity": (e * 100.0).round() / 100.0,
+                        "pnl": fnum(pl.get(i).unwrap_or(&Value::Null), 0.0),
+                        "pnl_pct": fnum(plpct.get(i).unwrap_or(&Value::Null), 0.0) * 100.0,
+                    })
+                })
+            })
+            .collect();
+        let base = fnum(&h["base_value"], 0.0);
+        let last_eq = points.last().and_then(|p| p["equity"].as_f64()).unwrap_or(base);
+        let total_pl = last_eq - base;
+        Ok(json!({
+            "period": period,
+            "timeframe": h["timeframe"].as_str().unwrap_or(timeframe),
+            "base_value": base,
+            "end_equity": last_eq,
+            "total_pl": (total_pl * 100.0).round() / 100.0,
+            "total_pl_pct": if base != 0.0 { (total_pl / base * 10000.0).round() / 100.0 } else { 0.0 },
+            "points": points,
+        }))
+    }
+
     // ---- positions ----------------------------------------------------------
     pub async fn get_positions(&self) -> ApiResult<Value> {
         let arr = self.get_trading("positions", &[]).await?;

@@ -786,6 +786,23 @@ export interface Backtest {
   note?: string;
 }
 
+export interface PortfolioPoint {
+  t: number; // unix seconds
+  equity: number;
+  pnl: number;
+  pnl_pct: number;
+}
+
+export interface PortfolioHistory {
+  period: string;
+  timeframe: string;
+  base_value: number;
+  end_equity: number;
+  total_pl: number;
+  total_pl_pct: number;
+  points: PortfolioPoint[];
+}
+
 export interface WSMessage {
   type: 'quote' | 'news' | 'signal';
   [key: string]: unknown;

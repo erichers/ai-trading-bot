@@ -25,17 +25,25 @@ Pick an outcome (Conservative → YOLO) or build from a documented strategy; one
 Set your starting cash and max bet per trade; get net P&L $, ending balance, equity curve and a per-trade ledger.
 ![Backtest](docs/screenshots/backtest.png)
 
+### Portfolio — equity curve, allocation & holdings (live Alpaca paper account)
+Every top-bar stat links to a dedicated page: equity → Portfolio, day P&L → P&L history, buying power → Buying Power.
+![Portfolio](docs/screenshots/portfolio.png)
+
 ### Risk — prebuilt risk profiles, hard limits, position sizer & kill switch
 ![Risk](docs/screenshots/risk.png)
 
 <table>
+<tr>
+<td width="50%"><b>P&L history</b> (date-range, per-period histogram)<br/><img src="docs/screenshots/pnl.png" alt="P&L"/></td>
+<td width="50%"><b>Buying Power</b> (totals, reserved, education)<br/><img src="docs/screenshots/buying-power.png" alt="Buying Power"/></td>
+</tr>
 <tr>
 <td width="50%"><b>Options Flow</b><br/><img src="docs/screenshots/options-flow.png" alt="Options Flow"/></td>
 <td width="50%"><b>Guided Bot Builder</b><br/><img src="docs/screenshots/builder.png" alt="Builder"/></td>
 </tr>
 <tr>
 <td width="50%"><b>Trades ledger</b> (plain-English contracts)<br/><img src="docs/screenshots/trades.png" alt="Trades"/></td>
-<td width="50%"><b>Positions & Orders</b><br/><img src="docs/screenshots/positions.png" alt="Positions"/></td>
+<td width="50%"><b>Positions & Orders</b> (quick buy/sell)<br/><img src="docs/screenshots/positions.png" alt="Positions"/></td>
 </tr>
 <tr>
 <td width="50%"><b>AI Research</b> (local Gemma + Kimi)<br/><img src="docs/screenshots/research.png" alt="Research"/></td>

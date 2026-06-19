@@ -1,9 +1,11 @@
-import { useMemo, useState } from 'react';
-import { ArrowUpDown, Search } from 'lucide-react';
-import { api } from '@/api/client';
-import type { Trade, TradeStatusFilter } from '@/api/types';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { ArrowUpDown, Search, Clock, X, Pencil } from 'lucide-react';
+import { api, ApiError } from '@/api/client';
+import type { Bot, Trade, TradeStatusFilter } from '@/api/types';
 import { usePolling } from '@/hooks/usePolling';
-import { Panel, Spinner, Empty, ErrorState, Badge, Toggle } from '@/components/ui';
+import { useAppData } from '@/hooks/useAppData';
+import { Panel, Spinner, Empty, ErrorState, Badge, Toggle, HelpTip } from '@/components/ui';
 import { ContractLabel } from '@/components/ContractLabel';
 import { money, num, timeOnly, timeAgo } from '@/lib/format';
 
@@ -98,6 +100,10 @@ export function Trades() {
   const [sortKey, setSortKey] = useState<SortKey>('time');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
 
+  const navigate = useNavigate();
+  const { clock, health } = useAppData();
+  const marketOpen = clock?.is_open ?? health?.market_open ?? false;
+
   const { data, error, loading, refetch } = usePolling<Trade[]>(
     () => api.trades(status === 'all' ? undefined : status, undefined, 100),
     5000,
@@ -105,6 +111,54 @@ export function Trades() {
   );
 
   const all = data ?? [];
+
+  // Resolve strategy_id → bot name so trades show which bot placed them.
+  const [botNames, setBotNames] = useState<Record<string, string>>({});
+  useEffect(() => {
+    let alive = true;
+    api
+      .bots()
+      .then((bots: Bot[]) => {
+        if (!alive) return;
+        const m: Record<string, string> = {};
+        for (const b of bots) m[b.id] = b.name || 'Untitled bot';
+        setBotNames(m);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  // Cancel (stop) a still-open order by its Alpaca order id.
+  const [cancelling, setCancelling] = useState<Record<string, boolean>>({});
+  const [actionErr, setActionErr] = useState<string | null>(null);
+  const cancelTrade = useCallback(
+    async (t: Trade) => {
+      const oid = t.alpaca_order_id;
+      if (!oid) {
+        setActionErr('No broker order id on this trade — cannot cancel.');
+        return;
+      }
+      setCancelling((c) => ({ ...c, [oid]: true }));
+      setActionErr(null);
+      try {
+        await api.cancelOrder(oid);
+        refetch();
+      } catch (e) {
+        setActionErr(e instanceof ApiError ? e.message : 'Cancel failed');
+      } finally {
+        setCancelling((c) => ({ ...c, [oid]: false }));
+      }
+    },
+    [refetch],
+  );
+
+  // Count open orders that are effectively queued while the market is closed.
+  const queuedCount = useMemo(
+    () => (marketOpen ? 0 : all.filter((t) => isOpenStatus(t.status)).length),
+    [all, marketOpen],
+  );
 
   // Client-side filtering for symbol + asset class (status handled server-side).
   const filtered = useMemo(() => {
@@ -193,6 +247,7 @@ export function Trades() {
               <th className="px-2 py-1 micro-label font-normal text-right">Fill Px</th>
               <SortHeader label="Status" sortableKey="status" />
               <th className="px-2 py-1 micro-label font-normal">Source</th>
+              <th className="px-2 py-1 micro-label font-normal text-right">Actions</th>
             </tr>
           </thead>
           <tbody className="tabular-nums">
@@ -228,20 +283,45 @@ export function Trades() {
                     {t.filled_avg_price != null ? money(t.filled_avg_price) : '—'}
                   </td>
                   <td className="px-2 py-1">
-                    <Badge tone={statusTone(t.status)}>{t.status}</Badge>
+                    <div className="flex items-center gap-1">
+                      <Badge tone={statusTone(t.status)}>{t.status}</Badge>
+                      {!marketOpen && isOpenStatus(t.status) && (
+                        <span className="inline-flex items-center gap-0.5 text-2xs text-amber" title="Market is closed — this order is queued and will attempt to fill at the next open.">
+                          <Clock size={10} /> queued
+                        </span>
+                      )}
+                    </div>
                   </td>
                   <td className="px-2 py-1">
                     <div className="flex items-center gap-1">
                       <SourceBadge source={t.source} />
-                      {t.strategy_id && (
-                        <span
-                          className="text-2xs text-muted font-mono truncate max-w-[80px]"
-                          title={t.strategy_id}
-                        >
-                          {t.strategy_id}
-                        </span>
-                      )}
+                      {t.strategy_id &&
+                        (botNames[t.strategy_id] ? (
+                          <button
+                            className="text-2xs text-amber hover:underline truncate max-w-[120px] flex items-center gap-0.5"
+                            title={`Edit bot: ${botNames[t.strategy_id]}`}
+                            onClick={() => navigate(`/?editBot=${encodeURIComponent(t.strategy_id!)}`)}
+                          >
+                            <Pencil size={9} /> {botNames[t.strategy_id]}
+                          </button>
+                        ) : (
+                          <span className="text-2xs text-muted font-mono truncate max-w-[80px]" title={t.strategy_id}>
+                            {t.strategy_id.slice(0, 8)}
+                          </span>
+                        ))}
                     </div>
+                  </td>
+                  <td className="px-2 py-1 text-right">
+                    {isOpenStatus(t.status) && (
+                      <button
+                        className="btn text-2xs px-1.5 py-0.5 text-down inline-flex items-center gap-1"
+                        disabled={!!(t.alpaca_order_id && cancelling[t.alpaca_order_id])}
+                        onClick={() => cancelTrade(t)}
+                        title={marketOpen ? 'Cancel this open order' : 'Cancel this queued order'}
+                      >
+                        <X size={10} /> {marketOpen ? 'Cancel' : 'Stop'}
+                      </button>
+                    )}
                   </td>
                 </tr>
               );
@@ -298,6 +378,29 @@ export function Trades() {
   return (
     <div className="flex flex-col gap-2 h-full min-h-0">
       <StatsStrip trades={all} />
+
+      {/* Market-closed queued-orders explanation */}
+      {queuedCount > 0 && (
+        <div className="panel border-amber/40 bg-amber/10 px-3 py-2 flex items-start gap-2">
+          <Clock size={14} className="text-amber shrink-0 mt-0.5" />
+          <div className="text-2xs text-text-dim leading-relaxed flex-1">
+            <span className="text-amber font-semibold">Market is closed.</span> {queuedCount} open order
+            {queuedCount > 1 ? 's are' : ' is'} <b>queued</b> — they show as <i>accepted/new</i> with{' '}
+            <span className="num">0</span> filled and will attempt to fill at the next session open (limit
+            orders only fill if your price is met). Use <b>Stop</b> on a row to cancel a queued order, or open its
+            bot to tweak the strategy.
+            <HelpTip title="Queued vs filled" className="ml-1">
+              When the market is closed, day orders are accepted and held by the broker until the open;
+              GTC orders persist across sessions. Nothing fills until regular hours (or extended hours if
+              enabled). Cancel anytime while still queued.
+            </HelpTip>
+          </div>
+        </div>
+      )}
+      {actionErr && (
+        <div className="panel border-down/40 bg-down/10 px-3 py-1.5 text-2xs text-down">{actionErr}</div>
+      )}
+
       <Panel
         title="Trade Ledger"
         right={filters}

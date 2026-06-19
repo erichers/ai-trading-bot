@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { X, ChevronDown, ChevronRight } from 'lucide-react';
 import { api, ApiError } from '@/api/client';
 import type { NewOrder, Order, OrderSide, OrderType, Position, TimeInForce } from '@/api/types';
@@ -60,16 +60,20 @@ function PositionsTable({
   positions,
   refetchPositions,
   refetchOrders,
+  onQuickOrder,
 }: {
   positions: Position[];
   refetchPositions: () => void;
   refetchOrders: () => void;
+  onQuickOrder: (symbol: string, side: OrderSide, qty: number) => void;
 }) {
   const [busy, setBusy] = useState<Record<string, boolean>>({});
   const [notes, setNotes] = useState<Record<string, string>>({});
+  const [confirmClose, setConfirmClose] = useState<string | null>(null);
 
   const closePosition = useCallback(
     async (p: Position) => {
+      setConfirmClose(null);
       setBusy((b) => ({ ...b, [p.symbol]: true }));
       try {
         const side: OrderSide = p.side.toLowerCase() === 'long' || p.side.toLowerCase() === 'buy' ? 'sell' : 'buy';
@@ -92,12 +96,6 @@ function PositionsTable({
     },
     [refetchPositions, refetchOrders],
   );
-
-  const moveBreakeven = useCallback((p: Position) => {
-    // Stub only — does NOT place an order. Real impl would amend/replace the
-    // protective stop leg to entry price.
-    setNotes((n) => ({ ...n, [p.symbol]: 'stop moved to breakeven (stub)' }));
-  }, []);
 
   if (positions.length === 0) return <Empty label="No open positions" />;
 
@@ -144,20 +142,42 @@ function PositionsTable({
               <td className="px-2 py-1.5">
                 <div className="flex items-center justify-end gap-1">
                   <button
-                    className="btn text-2xs px-1.5 py-0.5"
-                    disabled={busy[p.symbol]}
-                    onClick={() => closePosition(p)}
-                    title="Submit market order to close"
+                    className="btn text-2xs px-1.5 py-0.5 text-up"
+                    onClick={() => onQuickOrder(p.symbol, 'buy', Math.abs(p.qty))}
+                    title="Prefill the ticket to add to this position"
                   >
-                    {busy[p.symbol] ? '…' : 'Close'}
+                    Buy
                   </button>
                   <button
-                    className="btn text-2xs px-1.5 py-0.5"
-                    onClick={() => moveBreakeven(p)}
-                    title="Move stop to breakeven (stub)"
+                    className="btn text-2xs px-1.5 py-0.5 text-down"
+                    onClick={() => onQuickOrder(p.symbol, 'sell', Math.abs(p.qty))}
+                    title="Prefill the ticket to sell this position"
                   >
-                    BE
+                    Sell
                   </button>
+                  {confirmClose === p.symbol ? (
+                    <>
+                      <button
+                        className="btn-danger text-2xs px-1.5 py-0.5"
+                        disabled={busy[p.symbol]}
+                        onClick={() => closePosition(p)}
+                      >
+                        {busy[p.symbol] ? '…' : 'Confirm'}
+                      </button>
+                      <button className="btn text-2xs px-1.5 py-0.5" onClick={() => setConfirmClose(null)}>
+                        ✕
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      className="btn text-2xs px-1.5 py-0.5"
+                      disabled={busy[p.symbol]}
+                      onClick={() => setConfirmClose(p.symbol)}
+                      title="Market order to flatten the whole position"
+                    >
+                      Close
+                    </button>
+                  )}
                 </div>
                 {notes[p.symbol] && (
                   <div
@@ -186,17 +206,19 @@ function OrdersTable() {
     [status],
   );
   const [cancelling, setCancelling] = useState<Record<string, boolean>>({});
+  const [cancelErr, setCancelErr] = useState<string | null>(null);
 
   const orders = data ?? [];
 
   const cancel = useCallback(
     async (id: string) => {
       setCancelling((c) => ({ ...c, [id]: true }));
+      setCancelErr(null);
       try {
         await api.cancelOrder(id);
         refetch();
-      } catch {
-        /* surfaced by next poll */
+      } catch (e) {
+        setCancelErr(e instanceof ApiError ? e.message : 'Cancel failed');
       } finally {
         setCancelling((c) => ({ ...c, [id]: false }));
       }
@@ -301,13 +323,17 @@ function OrdersTable() {
 
   return (
     <Panel title="Orders" right={toggle} className="flex-1 min-h-0" bodyClassName="min-h-0">
+      {cancelErr && (
+        <div className="px-3 py-1.5 text-2xs text-down border-b border-down/30 bg-down/5">{cancelErr}</div>
+      )}
       {body}
     </Panel>
   );
 }
 
 // --- Order ticket -------------------------------------------------------
-function OrderTicket({ onSubmitted }: { onSubmitted: () => void }) {
+interface Prefill { symbol: string; side: OrderSide; qty: number; nonce: number }
+function OrderTicket({ onSubmitted, prefill }: { onSubmitted: () => void; prefill?: Prefill | null }) {
   const [symbol, setSymbol] = useState('');
   const [side, setSide] = useState<OrderSide>('buy');
   const [qty, setQty] = useState('');
@@ -324,6 +350,17 @@ function OrderTicket({ onSubmitted }: { onSubmitted: () => void }) {
 
   const needsLimit = type === 'limit' || type === 'stop_limit';
   const needsStop = type === 'stop' || type === 'stop_limit';
+
+  // Apply a quick-order prefill from a position row.
+  useEffect(() => {
+    if (!prefill) return;
+    setSymbol(prefill.symbol.toUpperCase());
+    setSide(prefill.side);
+    setQty(String(prefill.qty || ''));
+    setType('market');
+    setErr(null);
+    setOk(null);
+  }, [prefill]);
 
   const submit = useCallback(
     async (e: React.FormEvent) => {
@@ -539,6 +576,14 @@ export function PositionsOrders() {
   const [ordersNonce, setOrdersNonce] = useState(0);
   const refetchOrders = useCallback(() => setOrdersNonce((n) => n + 1), []);
 
+  // Quick-order prefill from a position row → seeds the Order Ticket.
+  const [prefill, setPrefill] = useState<Prefill | null>(null);
+  const quickOrder = useCallback(
+    (symbol: string, side: OrderSide, qty: number) =>
+      setPrefill((p) => ({ symbol, side, qty, nonce: (p?.nonce ?? 0) + 1 })),
+    [],
+  );
+
   const totalUnrl = useMemo(
     () => positions.reduce((a, p) => a + (p.unrealized_pl || 0), 0),
     [positions],
@@ -561,11 +606,13 @@ export function PositionsOrders() {
             positions={positions}
             refetchPositions={refetchPositions}
             refetchOrders={refetchOrders}
+            onQuickOrder={quickOrder}
           />
         </Panel>
         <OrdersTable key={ordersNonce} />
       </div>
       <OrderTicket
+        prefill={prefill}
         onSubmitted={() => {
           refetchOrders();
           refetchPositions();

@@ -108,6 +108,7 @@ pub fn build_app(app_state: AppState) -> Router {
         .route("/health", get(health))
         // trading
         .route("/account", get(account))
+        .route("/account/portfolio-history", get(portfolio_history))
         .route("/positions", get(positions))
         .route("/orders", get(orders).post(create_order).delete(kill_switch))
         .route("/orders/:order_id", delete(cancel_order))
@@ -287,6 +288,20 @@ async fn health(State(s): State<AppState>) -> Json<Value> {
 // ---- trading ----------------------------------------------------------------
 async fn account(State(s): State<AppState>) -> ApiResult<Json<Value>> {
     Ok(Json(s.alpaca.get_account().await?))
+}
+
+async fn portfolio_history(
+    State(s): State<AppState>,
+    Query(q): Query<HashMap<String, String>>,
+) -> ApiResult<Json<Value>> {
+    let period = q.get("period").cloned().unwrap_or_else(|| "1M".to_string());
+    let default_tf = match period.to_uppercase().as_str() {
+        "1D" => "5Min",
+        "1W" => "15Min",
+        _ => "1D",
+    };
+    let timeframe = q.get("timeframe").cloned().unwrap_or_else(|| default_tf.to_string());
+    Ok(Json(s.alpaca.get_portfolio_history(&period, &timeframe).await?))
 }
 
 async fn positions(State(s): State<AppState>) -> ApiResult<Json<Value>> {

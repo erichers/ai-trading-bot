@@ -1,4 +1,4 @@
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useAppData } from '@/hooks/useAppData';
 import { useSymbol } from '@/hooks/useSymbol';
 import { TickerSearch } from './TickerSearch';
@@ -54,16 +54,16 @@ export function TopBar() {
 
       {/* Right: equity, P&L, conn, kill */}
       <div className="flex items-center gap-4 shrink-0">
-        <div className="text-right">
+        <Link to="/portfolio" className="text-right rounded px-1.5 py-0.5 hover:bg-panel-2 transition-colors" title="Open Portfolio">
           <div className="micro-label">Equity</div>
           <div className="num text-sm text-text">{money(account?.equity ?? null)}</div>
-        </div>
-        <div className="text-right">
+        </Link>
+        <Link to="/pnl" className="text-right rounded px-1.5 py-0.5 hover:bg-panel-2 transition-colors" title="Open P&L">
           <div className="micro-label">Day P&amp;L</div>
           <div className={`num text-sm ${colorBySign(dayPl)}`}>
             {signed(dayPl)} <span className="text-2xs">{pct(account?.day_pl_pct)}</span>
           </div>
-        </div>
+        </Link>
         <div className="flex items-center gap-1.5">
           <ConnDot ok={wsStatus === 'open' && !!health?.alpaca_connected} />
           <span className="micro-label">{wsStatus === 'open' ? 'Live' : 'Off'}</span>

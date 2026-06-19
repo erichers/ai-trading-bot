@@ -18,6 +18,9 @@ import { PositionsOrders } from './views/PositionsOrders';
 import { Trades } from './views/Trades';
 import { Backtest } from './views/Backtest';
 import { Risk } from './views/Risk';
+import { Portfolio } from './views/Portfolio';
+import { Pnl } from './views/Pnl';
+import { BuyingPower } from './views/BuyingPower';
 import { Onboarding } from './views/Onboarding';
 import { SettingsView } from './views/Settings';
 import { Help } from './views/Help';
@@ -41,6 +44,9 @@ const router = createBrowserRouter(
         { path: 'chat', element: <Chat /> },
         { path: 'news', element: <News /> },
         { path: 'positions', element: <PositionsOrders /> },
+        { path: 'portfolio', element: <Portfolio /> },
+        { path: 'pnl', element: <Pnl /> },
+        { path: 'buying-power', element: <BuyingPower /> },
         { path: 'trades', element: <Trades /> },
         { path: 'backtest', element: <Backtest /> },
         { path: 'risk', element: <Risk /> },
