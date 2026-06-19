@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import {
   Plus,
   Bot as BotIcon,
+  BookOpen,
   GripVertical,
   ChevronLeft,
   ChevronDown,
@@ -316,6 +317,15 @@ export function BotSetup() {
             <span className="micro-label">
               {enabledCount}/{bots.length} on
             </span>
+          )}
+          {!inBuilder && (
+            <Link
+              to="/library"
+              className="btn flex items-center gap-1"
+              title="Browse research-backed strategy templates"
+            >
+              <BookOpen size={12} /> Library
+            </Link>
           )}
           {!inBuilder && (
             <button className="btn-amber flex items-center gap-1" onClick={openNew}>

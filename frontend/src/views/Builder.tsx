@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Wand2,
+  BookOpen,
   Plus,
   Trash2,
   X,
@@ -32,6 +34,7 @@ import type {
 } from '@/api/types';
 import { blankAction } from '@/api/types';
 import { money, num, pct } from '@/lib/format';
+import { takeTemplatePrefill } from '@/lib/templatePrefill';
 import { Badge, Empty, ErrorState, Panel, Spinner, Toggle } from '@/components/ui';
 import { BotEvaluation } from '@/components/BotEvaluation';
 import { Markdown } from '@/components/Markdown';
@@ -424,7 +427,7 @@ export function BuilderForm({
   onSaved,
   onCancel,
 }: {
-  initial?: Bot | null;
+  initial?: Partial<Bot> | null;
   onSaved?: (b: Bot) => void;
   onCancel?: () => void;
 }) {
@@ -1277,11 +1280,28 @@ function Row({ label, value }: { label: string; value: string }) {
 // ==========================================================================
 
 export function Builder() {
+  const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const list = usePolling<Bot[]>(() => api.bots(), 20000, []);
   const [mode, setMode] = useState<'list' | 'edit'>('list');
-  const [editing, setEditing] = useState<Bot | null>(null);
+  const [editing, setEditing] = useState<Partial<Bot> | null>(null);
 
   const bots = list.data ?? [];
+
+  // Prefill from the Strategy Library "Customize" action (?from=template).
+  useEffect(() => {
+    if (searchParams.get('from') !== 'template') return;
+    const draft = takeTemplatePrefill();
+    if (draft) {
+      setEditing(draft);
+      setMode('edit');
+    }
+    // clear the query param so a refresh doesn't re-trigger
+    const next = new URLSearchParams(searchParams);
+    next.delete('from');
+    setSearchParams(next, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function newBot() {
     setEditing(null);
@@ -1303,9 +1323,18 @@ export function Builder() {
       <Panel
         title="Bots"
         right={
-          <button className="btn-amber flex items-center gap-1" onClick={newBot}>
-            <Plus size={12} /> New
-          </button>
+          <div className="flex items-center gap-1.5">
+            <button
+              className="btn flex items-center gap-1"
+              onClick={() => navigate('/library')}
+              title="Start from a research-backed template"
+            >
+              <BookOpen size={12} /> Templates
+            </button>
+            <button className="btn-amber flex items-center gap-1" onClick={newBot}>
+              <Plus size={12} /> New
+            </button>
+          </div>
         }
         bodyClassName="overflow-y-auto"
       >
@@ -1383,9 +1412,14 @@ export function Builder() {
               Build a trading bot end-to-end: pick a ticker, define an entry trigger, choose calls or
               puts, pick the exact contract from the live chain, set sizing, and save.
             </p>
-            <button className="btn-amber flex items-center gap-1" onClick={newBot}>
-              <Plus size={12} /> New bot
-            </button>
+            <div className="flex items-center gap-2">
+              <button className="btn-amber flex items-center gap-1" onClick={newBot}>
+                <Plus size={12} /> New bot
+              </button>
+              <button className="btn flex items-center gap-1" onClick={() => navigate('/library')}>
+                <BookOpen size={12} /> Start from a template
+              </button>
+            </div>
           </div>
         )}
       </Panel>

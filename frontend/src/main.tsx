@@ -9,6 +9,7 @@ import { Dashboard } from './views/Dashboard';
 import { Tickers } from './views/Tickers';
 import { OptionsFlowView } from './views/OptionsFlow';
 import { Strategies } from './views/Strategies';
+import { Library } from './views/Library';
 import { Builder } from './views/Builder';
 import { Research } from './views/Research';
 import { Chat } from './views/Chat';
@@ -34,6 +35,7 @@ const router = createBrowserRouter(
         { path: 'tickers', element: <Tickers /> },
         { path: 'options', element: <OptionsFlowView /> },
         { path: 'strategies', element: <Strategies /> },
+        { path: 'library', element: <Library /> },
         { path: 'builder', element: <Builder /> },
         { path: 'research', element: <Research /> },
         { path: 'chat', element: <Chat /> },
