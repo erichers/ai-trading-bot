@@ -37,3 +37,4 @@ app-native/src-tauri/gen/
 # The Tauri placeholder splash dist is source, not a build artifact — keep it.
 !app-native/dist/
 !app-native/dist/index.html
+frontend/dist-sandbox/
